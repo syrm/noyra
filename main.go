@@ -7,15 +7,16 @@ import (
 	"log"
 	"time"
 
-	protoContainer "blackprism.org/noyra/grpc-proto/container"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+
+	protoContainer "blackprism.org/noyra/grpc-proto/container"
 )
 
 func main() {
 	go agent()
 
-	initNoyra()
+	//initNoyra()
 
 	for {
 	}

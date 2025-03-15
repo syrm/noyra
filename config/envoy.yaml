@@ -24,14 +24,14 @@ dynamic_resources:
 
 static_resources:
   clusters:
-  - type: STRICT_DNS
+  - name: xds_cluster
+    connect_timeout: 5s
+    type: STRICT_DNS
     typed_extension_protocol_options:
       envoy.extensions.upstreams.http.v3.HttpProtocolOptions:
         "@type": type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions
         explicit_http_config:
           http2_protocol_options: {}
-    connect_timeout: 5s
-    name: xds_cluster
     http2_protocol_options: {}
     load_assignment:
       cluster_name: xds_cluster
@@ -40,5 +40,10 @@ static_resources:
         - endpoint:
             address:
               socket_address:
-                address: discovery-service
+                address: host.containers.internal
                 port_value: 18000
+admin:
+  address:
+    socket_address:
+      address: 0.0.0.0
+      port_value: 9001
