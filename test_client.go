@@ -1,3 +1,4 @@
+//go:build ignore
 // +build ignore
 
 package main
@@ -10,7 +11,7 @@ import (
 	"os"
 	"time"
 
-	protoContainer "blackprism.org/noyra/grpc-proto/container"
+	protoContainer "blackprism.org/noyra/grpc-proto/agent"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 )
@@ -32,35 +33,36 @@ func main() {
 	}
 	defer conn.Close()
 
-	client := protoContainer.NewContainerClient(conn)
+	client := protoContainer.NewAgentClient(conn)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	switch os.Args[1] {
 	case "start":
 		startCmd.Parse(os.Args[2:])
-		
+
 		// Créer un conteneur de test (NGINX)
-		startRequest := &protoContainer.StartRequest{
+		startRequest := &protoContainer.ContainerStartRequest{
 			Name:  "test-nginx",
 			Image: "nginx:latest",
 			ExposedPorts: map[uint32]string{
 				80: "TCP",
 			},
 			Labels: map[string]string{
-				"app":     "test",
-				"service": "web",
+				"app":        "test",
+				"service":    "web",
+				"noyra.type": "http",
 			},
 		}
 
-		resp, err := client.Start(ctx, startRequest)
+		resp, err := client.ContainerStart(ctx, startRequest)
 		if err != nil {
 			log.Fatalf("Erreur lors du démarrage du conteneur: %v", err)
 		}
 
 		fmt.Printf("Réponse: %s\n", resp.Status)
 		fmt.Printf("Message: %s\n", resp.Message)
-		
+
 		if resp.Status == "OK" {
 			fmt.Println("\nLe conteneur a été démarré avec succès.")
 			fmt.Println("Pour vérifier que le service discovery fonctionne:")
@@ -71,7 +73,7 @@ func main() {
 
 	case "list":
 		listCmd.Parse(os.Args[2:])
-		
+
 		// Lister les conteneurs (si la méthode List est implémentée)
 		// Actuellement la méthode List est commentée dans le code source
 		fmt.Println("La méthode List n'est pas encore implémentée dans le service.")
