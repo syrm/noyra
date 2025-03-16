@@ -20,7 +20,7 @@ const (
 	clusterName  = "noyra-cluster"
 	listenerName = "example_listener"
 	routeName    = "example_route"
-	listenerPort = 80
+	listenerPort = 18880
 	nodeID       = "noyra-id"
 	upstreamHost = "10.89.0.6"
 	upstreamPort = 80
@@ -49,104 +49,8 @@ func makeConfigSource() *core.ConfigSource {
 	return source
 }
 
-func makeCluster() *cluster.Cluster {
-	return &cluster.Cluster{
-		Name:                 clusterName,
-		ConnectTimeout:       durationpb.New(250 * time.Millisecond),
-		ClusterDiscoveryType: &cluster.Cluster_Type{Type: cluster.Cluster_STATIC},
-		LbPolicy:             cluster.Cluster_ROUND_ROBIN,
-		LoadAssignment:       makeEndpoint(clusterName),
-		DnsLookupFamily:      cluster.Cluster_V4_ONLY,
-	}
-}
-
-func makeEndpoint(clusterName string) *endpoint.ClusterLoadAssignment {
-	return &endpoint.ClusterLoadAssignment{
-		ClusterName: clusterName,
-		Endpoints: []*endpoint.LocalityLbEndpoints{{
-			LbEndpoints: []*endpoint.LbEndpoint{{
-				HostIdentifier: &endpoint.LbEndpoint_Endpoint{
-					Endpoint: &endpoint.Endpoint{
-						Address: &core.Address{
-							Address: &core.Address_SocketAddress{
-								SocketAddress: &core.SocketAddress{
-									Protocol: core.SocketAddress_TCP,
-									Address:  upstreamHost, // test nginx container IP
-									PortSpecifier: &core.SocketAddress_PortValue{
-										PortValue: upstreamPort,
-									},
-								},
-							},
-						},
-					},
-				},
-			}},
-		}},
-	}
-}
-
-// Créer un exemple de endpoint cluster
-func makeClusterOld() *endpoint.ClusterLoadAssignment {
-	return &endpoint.ClusterLoadAssignment{
-		ClusterName: clusterName,
-		Endpoints: []*endpoint.LocalityLbEndpoints{{
-			LbEndpoints: []*endpoint.LbEndpoint{{
-				HostIdentifier: &endpoint.LbEndpoint_Endpoint{
-					Endpoint: &endpoint.Endpoint{
-						Address: &core.Address{
-							Address: &core.Address_SocketAddress{
-								SocketAddress: &core.SocketAddress{
-									Protocol: core.SocketAddress_TCP,
-									Address:  "127.0.0.1",
-									PortSpecifier: &core.SocketAddress_PortValue{
-										PortValue: 8080,
-									},
-								},
-							},
-						},
-					},
-				},
-			}},
-		}},
-	}
-}
-
-// Créer un exemple de Route Configuration
-func makeRouteConfig() *route.RouteConfiguration {
-	return &route.RouteConfiguration{
-		Name: routeName,
-		VirtualHosts: []*route.VirtualHost{{
-			Name:    "local_service",
-			Domains: []string{"test-nginx:10000"},
-			Routes: []*route.Route{{
-				Match: &route.RouteMatch{
-					PathSpecifier: &route.RouteMatch_Prefix{
-						Prefix: "/",
-					},
-				},
-				Action: &route.Route_Route{
-					Route: &route.RouteAction{
-						ClusterSpecifier: &route.RouteAction_Cluster{
-							Cluster: clusterName,
-						},
-						HostRewriteSpecifier: &route.RouteAction_HostRewriteLiteral{
-							HostRewriteLiteral: upstreamHost,
-						},
-					},
-				},
-			}},
-		}},
-	}
-}
-
-// Créer un exemple de Listener
 func makeListener() *listener.Listener {
 	routerConfig, _ := anypb.New(&router.Router{})
-	/*
-	   RouteSpecifier: &hcm.HttpConnectionManager_RouteConfig{
-	   			RouteConfig: routeConfig,
-	   		},
-	*/
 
 	manager := &hcm.HttpConnectionManager{
 		CodecType:  hcm.HttpConnectionManager_AUTO,
@@ -194,10 +98,47 @@ func makeListener() *listener.Listener {
 	}
 }
 
-// Créer un exemple de Cluster
-func makeEnvoyCluster() *endpoint.ClusterLoadAssignment {
+func makeRouteConfig() *route.RouteConfiguration {
+	return &route.RouteConfiguration{
+		Name: routeName,
+		VirtualHosts: []*route.VirtualHost{{
+			Name:    "local_service",
+			Domains: []string{"test-nginx:10000"},
+			Routes: []*route.Route{{
+				Match: &route.RouteMatch{
+					PathSpecifier: &route.RouteMatch_Prefix{
+						Prefix: "/",
+					},
+				},
+				Action: &route.Route_Route{
+					Route: &route.RouteAction{
+						ClusterSpecifier: &route.RouteAction_Cluster{
+							Cluster: clusterName,
+						},
+						HostRewriteSpecifier: &route.RouteAction_HostRewriteLiteral{
+							HostRewriteLiteral: "yoloooooo",
+						},
+					},
+				},
+			}},
+		}},
+	}
+}
+
+func makeCluster() *cluster.Cluster {
+	return &cluster.Cluster{
+		Name:                 clusterName,
+		ConnectTimeout:       durationpb.New(250 * time.Millisecond),
+		ClusterDiscoveryType: &cluster.Cluster_Type{Type: cluster.Cluster_STATIC},
+		LbPolicy:             cluster.Cluster_ROUND_ROBIN,
+		LoadAssignment:       makeEndpoint(clusterName),
+		DnsLookupFamily:      cluster.Cluster_V4_ONLY,
+	}
+}
+
+func makeEndpoint(clusterName string) *endpoint.ClusterLoadAssignment {
 	return &endpoint.ClusterLoadAssignment{
-		ClusterName: "xds_cluster",
+		ClusterName: clusterName,
 		Endpoints: []*endpoint.LocalityLbEndpoints{{
 			LbEndpoints: []*endpoint.LbEndpoint{{
 				HostIdentifier: &endpoint.LbEndpoint_Endpoint{
@@ -206,9 +147,9 @@ func makeEnvoyCluster() *endpoint.ClusterLoadAssignment {
 							Address: &core.Address_SocketAddress{
 								SocketAddress: &core.SocketAddress{
 									Protocol: core.SocketAddress_TCP,
-									Address:  "127.0.0.1",
+									Address:  upstreamHost,
 									PortSpecifier: &core.SocketAddress_PortValue{
-										PortValue: 9090,
+										PortValue: upstreamPort,
 									},
 								},
 							},

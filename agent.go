@@ -160,39 +160,46 @@ func (cs *containerServer) Start(ctx context.Context, startRequest *protoContain
 }
 
 func (cs *containerServer) Stop(ctx context.Context, stopRequest *protoContainer.StopRequest) (*protoContainer.Response, error) {
+	// Get container ID or name from the request
+	containerID := stopRequest.GetContainerId()
 
-	// err := cs.podmanConnection.ContainerStop(ctx, stopRequest.GetContainerId(), container.StopOptions{})
+	// Call Podman's container stop function
+	stopOptions := &containers.StopOptions{}
 
-	// if err != nil {
-	// 	println(err.Error())
-	// 	return &protoContainer.Response{Status: "KO"}, err
-	// }
+	err := containers.Stop(cs.podmanContext, containerID, stopOptions)
 
+	if err != nil {
+		log.Printf("Error stopping container %s: %v", containerID, err)
+		return &protoContainer.Response{Status: "KO"}, err
+	}
+
+	log.Printf("Container %s stopped successfully", containerID)
 	return &protoContainer.Response{Status: "OK"}, nil
 }
 
 func (cs *containerServer) Remove(ctx context.Context, removeRequest *protoContainer.RemoveRequest) (*protoContainer.Response, error) {
-	// err := cs.podmanConnection.ContainerRemove(ctx, removeRequest.GetContainerId(), container.RemoveOptions{})
+	// Get container ID or name from the request
+	containerID := removeRequest.GetContainerId()
 
-	// if err != nil {
-	// 	println(err.Error())
-	// 	return &protoContainer.Response{Status: "KO"}, err
-	// }
+	force := true
+	volumes := true
+	removeOptions := &containers.RemoveOptions{
+		Force:   &force,
+		Volumes: &volumes,
+	}
 
+	response, err := containers.Remove(cs.podmanContext, containerID, removeOptions)
+
+	if err != nil {
+		log.Printf("Error removing container %s: %v", containerID, err)
+		return &protoContainer.Response{Status: "KO"}, err
+	}
+
+	log.Printf("Container %s removed successfully: %v", containerID, response)
 	return &protoContainer.Response{Status: "OK"}, nil
 }
 
 func (cs *containerServer) pullImage(ctx context.Context, startRequest *protoContainer.StartRequest) {
-	// filterArgs := filters.NewArgs()
-	// filterArgs.Add("reference", startRequest.GetImage())
-
-	// images, _ := cs.podmanConnection.ImageList(ctx, image.ListOptions{Filters: filterArgs})
-
-	// if len(images) > 0 {
-	// 	log.Println("image " + startRequest.GetImage() + " already present")
-	// 	return
-	// }
-
 	imagesList, _ := images.List(cs.podmanContext, &images.ListOptions{Filters: map[string][]string{
 		"reference": {startRequest.GetImage()},
 	}})
@@ -210,24 +217,24 @@ func (cs *containerServer) pullImage(ctx context.Context, startRequest *protoCon
 	}
 }
 
-// func (cs *containerServer) List(ctx context.Context, listRequest *protoContainer.ListRequest) (*protoContainer.ListResponse, error) {
+func (cs *containerServer) List(ctx context.Context, listRequest *protoContainer.ListRequest) (*protoContainer.ListResponse, error) {
+	podmanContainers, err := containers.List(cs.podmanContext, &containers.ListOptions{})
+	if err != nil {
+		log.Printf("Error listing containers: %v", err)
+		return nil, err
+	}
 
-// containers, errContainerList := cs.podmanConnection.ContainerList(ctx, container.ListOptions{})
-// if errContainerList != nil {
-// 	println(errContainerList.Error())
-// }
+	var containersInfo []*protoContainer.ContainerInfo
 
-// var containersInfo []*protoContainer.ContainerInfo
+	for _, c := range podmanContainers {
+		containersInfo = append(containersInfo, &protoContainer.ContainerInfo{
+			Id:   c.ID,
+			Name: c.Names[0],
+		})
+	}
 
-// for _, c := range containers {
-// 	containersInfo = append(containersInfo, &protoContainer.ContainerInfo{
-// 		Id:   c.ID,
-// 		Name: c.Names[0],
-// 	})
-// }
-
-// return &protoContainer.ListResponse{Containers: containersInfo}, nil
-// }
+	return &protoContainer.ListResponse{Containers: containersInfo}, nil
+}
 
 func agent() {
 	flag.Parse()
@@ -329,29 +336,6 @@ func discoveryService() {
 	clusterservice.RegisterClusterDiscoveryServiceServer(grpcServer, xdsServer)
 
 	log.Printf("Serveur EDS démarré sur port 18000...")
-
-	// Mettre à jour périodiquement les endpoints (simulation)
-	//go func() {
-	//	version := 2
-	//	for {
-	//		time.Sleep(30 * time.Second)
-	//		resources := map[resource.Type][]types.Resource{
-	//			resource.EndpointType: {makeCluster()},
-	//			resource.ListenerType: {makeListener()},
-	//		}
-	//		snapshot, err := cache.NewSnapshot(fmt.Sprintf("%d", version), resources)
-	//		if err != nil {
-	//			log.Printf("Erreur création snapshot: %v", err)
-	//			continue
-	//		}
-	//
-	//		err = snapshotCache.SetSnapshot(context.Background(), nodeID, snapshot)
-	//		if err != nil {
-	//			log.Printf("Erreur mise à jour snapshot: %v", err)
-	//		}
-	//		version++
-	//	}
-	//}()
 
 	// Démarrer le serveur
 	if err := grpcServer.Serve(lis); err != nil {
