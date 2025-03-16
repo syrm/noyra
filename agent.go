@@ -4,31 +4,24 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"log"
+	"log/slog"
 	"net"
+	"os"
 	"strings"
 	"time"
 
-	protoContainer "blackprism.org/noyra/grpc-proto/container"
+	protoAgent "blackprism.org/noyra/grpc-proto/agent"
 
 	nettypes "github.com/containers/common/libnetwork/types"
-	"github.com/containers/podman/v5/pkg/bindings"
 	"github.com/containers/podman/v5/pkg/bindings/containers"
 	"github.com/containers/podman/v5/pkg/bindings/images"
 	"github.com/containers/podman/v5/pkg/bindings/network"
+	"github.com/containers/podman/v5/pkg/bindings/system"
+	"github.com/containers/podman/v5/pkg/domain/entities"
 	"github.com/containers/podman/v5/pkg/specgen"
-	clusterservice "github.com/envoyproxy/go-control-plane/envoy/service/cluster/v3"
-	discovery "github.com/envoyproxy/go-control-plane/envoy/service/discovery/v3"
-	endpointservice "github.com/envoyproxy/go-control-plane/envoy/service/endpoint/v3"
-	listenerservice "github.com/envoyproxy/go-control-plane/envoy/service/listener/v3"
-	routeservice "github.com/envoyproxy/go-control-plane/envoy/service/route/v3"
-	"github.com/envoyproxy/go-control-plane/pkg/cache/types"
-	"github.com/envoyproxy/go-control-plane/pkg/cache/v3"
-	"github.com/envoyproxy/go-control-plane/pkg/resource/v3"
-	"github.com/envoyproxy/go-control-plane/pkg/server/v3"
+	"github.com/fullstorydev/grpchan/inprocgrpc"
 	spec "github.com/opencontainers/runtime-spec/specs-go"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/keepalive"
 )
 
 const (
@@ -38,34 +31,70 @@ const (
 	grpcMaxConcurrentStreams = 1000000
 )
 
-type containerServer struct {
-	protoContainer.UnimplementedContainerServer
+// @TODO le nom agent MEH
+type agent struct {
+	protoAgent.UnimplementedAgentServer
 
 	podmanContext context.Context
+	GrpcServer    *grpc.Server
+	Direct        protoAgent.AgentClient
 }
 
-func (cs *containerServer) Start(ctx context.Context, startRequest *protoContainer.StartRequest) (*protoContainer.Response, error) {
+func BuildAgent(podmanContext context.Context) *agent {
+	a := &agent{podmanContext: podmanContext}
 
+	channel := &inprocgrpc.Channel{}
+	a.GrpcServer = grpc.NewServer()
+
+	protoAgent.RegisterAgentServer(a.GrpcServer, a)
+	channel.RegisterService(&protoAgent.Agent_ServiceDesc, a)
+
+	a.Direct = protoAgent.NewAgentClient(channel)
+
+	return a
+}
+
+func (agentService *agent) Run() {
+	ctx := context.Background()
+	flag.Parse()
+	listenContainer, err := net.Listen("tcp", ":4646")
+
+	if err != nil {
+		slog.LogAttrs(ctx, slog.LevelError, "Failed to listen for container service",
+			slog.Any("error", err))
+		os.Exit(1)
+	}
+
+	slog.LogAttrs(ctx, slog.LevelInfo, "Container service listening",
+		slog.Any("address", listenContainer.Addr()))
+
+	if err := agentService.GrpcServer.Serve(listenContainer); err != nil {
+		slog.LogAttrs(ctx, slog.LevelError, "Container service failed",
+			slog.Any("error", err))
+		os.Exit(1)
+	}
+}
+
+func (cs *agent) ContainerStart(ctx context.Context, startRequest *protoAgent.ContainerStartRequest) (*protoAgent.Response, error) {
 	cs.pullImage(ctx, startRequest)
 
-	// Vérifier si le réseau noyra existe déjà
 	networkExists := false
 	networks, err := network.List(cs.podmanContext, &network.ListOptions{})
 	if err != nil {
-		log.Printf("Erreur lors de la vérification des réseaux: %v", err)
-		return &protoContainer.Response{Status: "KO"}, fmt.Errorf("erreur lors de la vérification des réseaux: %v", err)
+		slog.LogAttrs(ctx, slog.LevelError, "Error checking networks",
+			slog.Any("error", err))
+		return &protoAgent.Response{Status: "KO"}, fmt.Errorf("error checking networks: %v", err)
 	}
 
 	for _, net := range networks {
 		if net.Name == "noyra" {
 			networkExists = true
-			// Vérifier que le réseau est bien en mode bridge
 			if net.Driver != "bridge" {
-				log.Printf("Le réseau noyra existe mais n'est pas configuré en mode bridge (mode actuel: %s)", net.Driver)
-				// Supprimer le réseau existant pour le recréer en bridge
+				slog.LogAttrs(ctx, slog.LevelWarn, "Network noyra exists but is not configured in bridge mode",
+					slog.String("currentDriver", net.Driver))
 				_, err := network.Remove(cs.podmanContext, "noyra", &network.RemoveOptions{})
 				if err != nil {
-					return &protoContainer.Response{Status: "KO"}, fmt.Errorf("impossible de supprimer le réseau noyra non-bridge: %v", err)
+					return &protoAgent.Response{Status: "KO"}, fmt.Errorf("unable to remove non-bridge noyra network: %v", err)
 				}
 				networkExists = false
 			}
@@ -73,17 +102,18 @@ func (cs *containerServer) Start(ctx context.Context, startRequest *protoContain
 		}
 	}
 
-	// Créer le réseau s'il n'existe pas ou s'il a été supprimé
 	if !networkExists {
 		networkCreate, err := network.Create(cs.podmanContext, &nettypes.Network{
 			Name:   "noyra",
 			Driver: "bridge",
 		})
 		if err != nil {
-			log.Printf("Erreur lors de la création du réseau noyra: %v", err)
-			return &protoContainer.Response{Status: "KO"}, fmt.Errorf("erreur lors de la création du réseau noyra: %v", err)
+			slog.LogAttrs(ctx, slog.LevelError, "Error creating noyra network",
+				slog.Any("error", err))
+			return &protoAgent.Response{Status: "KO"}, fmt.Errorf("error creating noyra network: %v", err)
 		}
-		log.Printf("Réseau noyra créé avec succès: %s", networkCreate)
+		slog.LogAttrs(ctx, slog.LevelInfo, "Noyra network created successfully",
+			slog.Any("network", networkCreate))
 	}
 
 	exposedPorts := make(map[uint16]string)
@@ -93,14 +123,10 @@ func (cs *containerServer) Start(ctx context.Context, startRequest *protoContain
 		exposedPorts[uint16(i)] = exposedPort
 	}
 
-	// Préparer les volumes pour le conteneur
-	// Utiliser un chemin absolu pour le fichier de configuration
 	configPath := "/mnt/data/src/go/noyra/config/envoy.yaml"
 
-	// Vérifier si nous avons des arguments spéciaux pour l'image envoy
 	args := []string{}
 	if strings.Contains(startRequest.GetImage(), "envoyproxy/envoy") {
-		// Si c'est l'image Envoy, ajouter les arguments spécifiques
 		args = []string{"-c", "/config.yaml", "--drain-time-s", "5", "-l", "debug"}
 	}
 
@@ -111,8 +137,7 @@ func (cs *containerServer) Start(ctx context.Context, startRequest *protoContain
 			Command: args,
 		},
 		ContainerStorageConfig: specgen.ContainerStorageConfig{
-			Image: startRequest.GetImage(),
-			// Ajouter les volumes
+			Image:   startRequest.GetImage(),
 			Volumes: []*specgen.NamedVolume{},
 			Mounts: []spec.Mount{
 				{
@@ -125,60 +150,63 @@ func (cs *containerServer) Start(ctx context.Context, startRequest *protoContain
 		},
 		ContainerNetworkConfig: specgen.ContainerNetworkConfig{
 			Expose: exposedPorts,
-			// Spécifier explicitement le mode réseau bridge
 			NetNS: specgen.Namespace{
 				NSMode: specgen.Bridge,
 			},
 			Networks: map[string]nettypes.PerNetworkOptions{
 				"noyra": {},
 			},
-			PortMappings: []nettypes.PortMapping{
-				{
-					ContainerPort: 10000,
-					HostPort:      10000,
-				},
-				{
-					ContainerPort: 9001,
-					HostPort:      9001,
-				},
-			},
 		},
+	}
+
+	if strings.Contains(startRequest.GetImage(), "envoyproxy/envoy") {
+		containerSpec.ContainerNetworkConfig.PortMappings = []nettypes.PortMapping{
+			{
+				ContainerPort: 10000,
+				HostPort:      10000,
+			},
+			{
+				ContainerPort: 9001,
+				HostPort:      9001,
+			},
+		}
 	}
 
 	response, err := containers.CreateWithSpec(cs.podmanContext, &containerSpec, nil)
 
 	if err != nil {
-		return &protoContainer.Response{Status: "KO"}, err
+		return &protoAgent.Response{Status: "KO"}, err
 	}
 
 	containerID := response.ID
-	fmt.Printf("Le conteneur a été créé avec ID: %s\n", containerID)
+	slog.LogAttrs(ctx, slog.LevelInfo, "Container created",
+		slog.String("id", containerID))
 
 	containers.Start(cs.podmanContext, containerID, &containers.StartOptions{})
 
-	return &protoContainer.Response{Status: "OK"}, nil
+	return &protoAgent.Response{Status: "OK"}, nil
 }
 
-func (cs *containerServer) Stop(ctx context.Context, stopRequest *protoContainer.StopRequest) (*protoContainer.Response, error) {
-	// Get container ID or name from the request
+func (cs *agent) ContainerStop(ctx context.Context, stopRequest *protoAgent.ContainerStopRequest) (*protoAgent.Response, error) {
 	containerID := stopRequest.GetContainerId()
 
-	// Call Podman's container stop function
 	stopOptions := &containers.StopOptions{}
 
 	err := containers.Stop(cs.podmanContext, containerID, stopOptions)
 
 	if err != nil {
-		log.Printf("Error stopping container %s: %v", containerID, err)
-		return &protoContainer.Response{Status: "KO"}, err
+		slog.LogAttrs(ctx, slog.LevelError, "Error stopping container",
+			slog.String("containerId", containerID),
+			slog.Any("error", err))
+		return &protoAgent.Response{Status: "KO"}, err
 	}
 
-	log.Printf("Container %s stopped successfully", containerID)
-	return &protoContainer.Response{Status: "OK"}, nil
+	slog.LogAttrs(ctx, slog.LevelInfo, "Container stopped successfully",
+		slog.String("containerId", containerID))
+	return &protoAgent.Response{Status: "OK"}, nil
 }
 
-func (cs *containerServer) Remove(ctx context.Context, removeRequest *protoContainer.RemoveRequest) (*protoContainer.Response, error) {
-	// Get container ID or name from the request
+func (cs *agent) ContainerRemove(ctx context.Context, removeRequest *protoAgent.ContainerRemoveRequest) (*protoAgent.Response, error) {
 	containerID := removeRequest.GetContainerId()
 
 	force := true
@@ -191,21 +219,114 @@ func (cs *containerServer) Remove(ctx context.Context, removeRequest *protoConta
 	response, err := containers.Remove(cs.podmanContext, containerID, removeOptions)
 
 	if err != nil {
-		log.Printf("Error removing container %s: %v", containerID, err)
-		return &protoContainer.Response{Status: "KO"}, err
+		slog.LogAttrs(ctx, slog.LevelError, "Error removing container",
+			slog.String("containerId", containerID),
+			slog.Any("error", err))
+		return &protoAgent.Response{Status: "KO"}, err
 	}
 
-	log.Printf("Container %s removed successfully: %v", containerID, response)
-	return &protoContainer.Response{Status: "OK"}, nil
+	slog.LogAttrs(ctx, slog.LevelInfo, "Container removed successfully",
+		slog.String("containerId", containerID),
+		slog.Any("response", response))
+	return &protoAgent.Response{Status: "OK"}, nil
 }
 
-func (cs *containerServer) pullImage(ctx context.Context, startRequest *protoContainer.StartRequest) {
+func (cs *agent) ContainerList(ctx context.Context, listRequest *protoAgent.ContainerListRequest) (*protoAgent.ContainerListResponse, error) {
+	podmanContainers, err := containers.List(cs.podmanContext, &containers.ListOptions{})
+	if err != nil {
+		slog.LogAttrs(ctx, slog.LevelError, "Error listing containers",
+			slog.Any("error", err))
+		return nil, err
+	}
+
+	var containersInfo []*protoAgent.ContainerInfo
+
+	for _, c := range podmanContainers {
+		var exposedPort int32
+		for key := range c.ExposedPorts {
+			exposedPort = int32(key)
+			break
+		}
+
+		var ipAddress string
+		inspectData, err := containers.Inspect(cs.podmanContext, c.ID, &containers.InspectOptions{})
+		if err == nil && inspectData.NetworkSettings != nil {
+			for name, network := range inspectData.NetworkSettings.Networks {
+				if name == "noyra" {
+					ipAddress = network.IPAddress
+					break
+				}
+			}
+		}
+
+		containersInfo = append(containersInfo, &protoAgent.ContainerInfo{
+			Id:          c.ID,
+			Name:        c.Names[0],
+			Labels:      c.Labels,
+			ExposedPort: exposedPort,
+			IPAddress:   ipAddress,
+		})
+	}
+
+	return &protoAgent.ContainerListResponse{Containers: containersInfo}, nil
+}
+
+func (cs *agent) ContainerListener(in *protoAgent.ContainerListenerRequest, stream protoAgent.Agent_ContainerListenerServer) error {
+
+	options := new(system.EventsOptions).WithStream(true)
+	options.WithFilters(map[string][]string{
+		"type":  {"container"},
+		"event": {"create", "start", "stop", "die"},
+	})
+
+	eventChannel := make(chan entities.Event)
+
+	go func() {
+		err := system.Events(cs.podmanContext, eventChannel, nil, options)
+		if err != nil {
+			fmt.Printf("Error setting up events listener: %v\n", err)
+		}
+	}()
+
+	for {
+		select {
+		case event := <-eventChannel:
+			if event.Type == "container" {
+				containerEvent := &protoAgent.ContainerEvent{
+					Id:     event.Actor.ID,
+					Action: event.Status,
+				}
+
+				if err := stream.Send(containerEvent); err != nil {
+					fmt.Printf("Error sending event: %v\n", err)
+					return err
+				}
+
+				switch event.Status {
+				case "create":
+					fmt.Printf("Container created: %s\n", event.Actor.ID)
+				case "start":
+					fmt.Printf("Container started: %s\n", event.Actor.ID)
+				case "stop":
+					fmt.Printf("Container stopped: %s\n", event.Actor.ID)
+				case "die":
+					fmt.Printf("Container died: %s\n", event.Actor.ID)
+				}
+			}
+		case <-stream.Context().Done():
+			return stream.Context().Err()
+		}
+	}
+}
+
+func (cs *agent) pullImage(ctx context.Context, startRequest *protoAgent.ContainerStartRequest) {
 	imagesList, _ := images.List(cs.podmanContext, &images.ListOptions{Filters: map[string][]string{
 		"reference": {startRequest.GetImage()},
 	}})
 
 	if len(imagesList) > 0 {
-		log.Println("image " + startRequest.GetImage() + " already present")
+		slog.LogAttrs(ctx, slog.LevelInfo, "Image already present",
+			slog.String("image", startRequest.GetImage()))
 		return
 	}
 
@@ -213,132 +334,9 @@ func (cs *containerServer) pullImage(ctx context.Context, startRequest *protoCon
 	_, err := images.Pull(cs.podmanContext, startRequest.GetImage(), &images.PullOptions{Quiet: &quiet})
 
 	if err != nil {
+		slog.LogAttrs(ctx, slog.LevelError, "Error pulling image",
+			slog.String("image", startRequest.GetImage()),
+			slog.Any("error", err))
 		panic(err.Error())
-	}
-}
-
-func (cs *containerServer) List(ctx context.Context, listRequest *protoContainer.ListRequest) (*protoContainer.ListResponse, error) {
-	podmanContainers, err := containers.List(cs.podmanContext, &containers.ListOptions{})
-	if err != nil {
-		log.Printf("Error listing containers: %v", err)
-		return nil, err
-	}
-
-	var containersInfo []*protoContainer.ContainerInfo
-
-	for _, c := range podmanContainers {
-		containersInfo = append(containersInfo, &protoContainer.ContainerInfo{
-			Id:   c.ID,
-			Name: c.Names[0],
-		})
-	}
-
-	return &protoContainer.ListResponse{Containers: containersInfo}, nil
-}
-
-func agent() {
-	flag.Parse()
-	// Connexion pour le service conteneur
-	listenContainer, err := net.Listen("tcp", ":4646")
-	if err != nil {
-		log.Fatalf("failed to listen for container service: %v", err)
-	}
-
-	ctx := context.Background()
-
-	podmanConnection, err := bindings.NewConnection(ctx, "unix:///run/user/1000/podman/podman.sock")
-
-	if err != nil {
-		log.Fatalf("Error connecting to Podman: %v", err)
-	}
-	/*
-		inspectData, err := containers.Inspect(conn, "smallapp-1", new(containers.InspectOptions).WithSize(true))
-
-		if err != nil {
-			log.Fatalf("a", err)
-		}
-
-		fmt.Printf("%+v\n", inspectData)
-	*/
-
-	//cli, _ := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
-
-	cs := containerServer{
-		podmanContext: podmanConnection,
-	}
-
-	// Démarrer le service container
-	containerServer := grpc.NewServer()
-	protoContainer.RegisterContainerServer(containerServer, &cs)
-
-	var grpcOptions []grpc.ServerOption
-	grpcOptions = append(grpcOptions,
-		grpc.MaxConcurrentStreams(grpcMaxConcurrentStreams),
-		grpc.KeepaliveParams(keepalive.ServerParameters{
-			Time:    grpcKeepaliveTime,
-			Timeout: grpcKeepaliveTimeout,
-		}),
-		grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{
-			MinTime:             grpcKeepaliveMinTime,
-			PermitWithoutStream: true,
-		}),
-	)
-
-	go discoveryService()
-
-	// Lancer les deux serveurs en parallèle
-	log.Printf("containerServer listening at %v", listenContainer.Addr())
-
-	if err := containerServer.Serve(listenContainer); err != nil {
-		log.Fatalf("failed to serve container service: %v", err)
-	}
-
-}
-
-func discoveryService() {
-	// Créer la configuration du cache xDS
-	snapshotCache := cache.NewSnapshotCache(false, cache.IDHash{}, nil)
-
-	// Créer le serveur avec les callbacks
-	xdsServer := server.NewServer(context.Background(), snapshotCache, Callbacks{})
-
-	// Créer un nouveau snapshot en ajoutant les ressources
-	resources := map[resource.Type][]types.Resource{
-		resource.ClusterType:  {makeCluster()},
-		resource.RouteType:    {makeRouteConfig()},
-		resource.ListenerType: {makeListener()},
-	}
-
-	// Créer le snapshot
-	snapshot, err := cache.NewSnapshot("1", resources)
-	if err != nil {
-		log.Fatalf("Impossible de créer le snapshot: %v", err)
-	}
-
-	// Mettre à jour le cache avec le nouveau snapshot
-	err = snapshotCache.SetSnapshot(context.Background(), nodeID, snapshot)
-	if err != nil {
-		log.Fatalf("Erreur mise à jour snapshot: %v", err)
-	}
-
-	// Démarrer le serveur gRPC
-	grpcServer := grpc.NewServer(grpc.MaxConcurrentStreams(grpcMaxConcurrentStreams))
-	lis, err := net.Listen("tcp", ":18000")
-	if err != nil {
-		log.Fatalf("Impossible d'écouter: %v", err)
-	}
-
-	// Enregistrer les services EDS
-	discovery.RegisterAggregatedDiscoveryServiceServer(grpcServer, xdsServer)
-	endpointservice.RegisterEndpointDiscoveryServiceServer(grpcServer, xdsServer)
-	listenerservice.RegisterListenerDiscoveryServiceServer(grpcServer, xdsServer)
-	routeservice.RegisterRouteDiscoveryServiceServer(grpcServer, xdsServer)
-	clusterservice.RegisterClusterDiscoveryServiceServer(grpcServer, xdsServer)
-
-	log.Printf("Serveur EDS démarré sur port 18000...")
-
-	// Démarrer le serveur
-	if err := grpcServer.Serve(lis); err != nil {
-		log.Fatalf("Erreur démarrage serveur: %v", err)
 	}
 }

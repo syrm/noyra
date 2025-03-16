@@ -1,0 +1,55 @@
+syntax = "proto3";
+
+option go_package = "blackprism.org/noyra/grpc-proto/agent";
+
+package agent;
+
+service Agent {
+  rpc ContainerStart (ContainerStartRequest) returns (Response) {}
+  rpc ContainerStop (ContainerStopRequest) returns (Response) {}
+  rpc ContainerRemove (ContainerRemoveRequest) returns (Response) {}
+  rpc ContainerList (ContainerListRequest) returns (ContainerListResponse) {}
+  rpc ContainerListener (ContainerListenerRequest) returns (stream ContainerEvent) {}
+}
+
+message ContainerStartRequest {
+  string image = 1;
+  string name = 2;
+  map<string, string> labels = 3;
+  map<uint32, string> exposed_ports = 4;
+  string network = 5;
+}
+
+message ContainerStopRequest {
+  string containerId = 1;
+}
+
+message ContainerRemoveRequest {
+  string containerId = 1;
+}
+
+message ContainerListRequest {}
+
+message ContainerListResponse {
+  repeated ContainerInfo containers = 1;
+}
+
+message ContainerInfo {
+  string id = 1;
+  string name = 2;
+  map<string, string> labels = 3;
+  string IPAddress = 4;
+  int32 exposedPort = 5;
+}
+
+message ContainerListenerRequest {}
+
+message ContainerEvent {
+  string id = 1;
+  string action = 2;
+}
+
+message Response {
+  string status = 1;
+  string message = 2;
+}
