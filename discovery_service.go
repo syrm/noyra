@@ -137,6 +137,7 @@ func (ds *discoveryService) addCluster(container *protoAgent.ContainerInfo) {
 	}
 
 	if ds.resources[clusterName] != nil {
+		ds.resources[clusterName][resource.ClusterType][0].(*cluster.Cluster).LoadAssignment.Endpoints[0].LbEndpoints = append(ds.resources[clusterName][resource.ClusterType][0].(*cluster.Cluster).LoadAssignment.Endpoints[0].LbEndpoints, ds.addEndpoint(container.IPAddress, container.ExposedPort))
 		return
 	}
 
@@ -147,15 +148,15 @@ func (ds *discoveryService) addCluster(container *protoAgent.ContainerInfo) {
 	}
 
 	resources := make(map[resource.Type][]types.Resource)
-	loadAssignment := makeEndpointConfig(clusterName, container.IPAddress, container.ExposedPort)
-	resources[resource.ListenerType] = append(resources[resource.ListenerType], makeListenerConfig(container.Name))
-	resources[resource.RouteType] = append(resources[resource.RouteType], makeRouteConfig(clusterName, clusterDomain, container.Name))
-	resources[resource.ClusterType] = append(resources[resource.ClusterType], makeClusterConfig(clusterName, loadAssignment))
+	loadAssignment := ds.makeEndpointConfig(clusterName, []*endpoint.LbEndpoint{ds.addEndpoint(container.IPAddress, container.ExposedPort)})
+	resources[resource.ListenerType] = append(resources[resource.ListenerType], ds.makeListenerConfig(container.Name))
+	resources[resource.RouteType] = append(resources[resource.RouteType], ds.makeRouteConfig(clusterName, clusterDomain, container.Name))
+	resources[resource.ClusterType] = append(resources[resource.ClusterType], ds.makeClusterConfig(clusterName, loadAssignment))
 
 	ds.resources[clusterName] = resources
 }
 
-func makeConfigSource() *core.ConfigSource {
+func (ds *discoveryService) makeConfigSource() *core.ConfigSource {
 	source := &core.ConfigSource{}
 	source.ResourceApiVersion = resource.DefaultAPIVersion
 	source.ConfigSourceSpecifier = &core.ConfigSource_ApiConfigSource{
@@ -173,7 +174,7 @@ func makeConfigSource() *core.ConfigSource {
 	return source
 }
 
-func makeListenerConfig(name string) *listener.Listener {
+func (ds *discoveryService) makeListenerConfig(name string) *listener.Listener {
 	routerConfig, _ := anypb.New(&router.Router{})
 
 	manager := &hcm.HttpConnectionManager{
@@ -181,7 +182,7 @@ func makeListenerConfig(name string) *listener.Listener {
 		StatPrefix: "http",
 		RouteSpecifier: &hcm.HttpConnectionManager_Rds{
 			Rds: &hcm.Rds{
-				ConfigSource:    makeConfigSource(),
+				ConfigSource:    ds.makeConfigSource(),
 				RouteConfigName: name,
 			},
 		},
@@ -222,7 +223,7 @@ func makeListenerConfig(name string) *listener.Listener {
 	}
 }
 
-func makeRouteConfig(clusterName string, clusterDomain string, name string) *route.RouteConfiguration {
+func (ds *discoveryService) makeRouteConfig(clusterName string, clusterDomain string, name string) *route.RouteConfiguration {
 	return &route.RouteConfiguration{
 		Name: name,
 		VirtualHosts: []*route.VirtualHost{{
@@ -249,7 +250,7 @@ func makeRouteConfig(clusterName string, clusterDomain string, name string) *rou
 	}
 }
 
-func makeClusterConfig(name string, loadAssignment *endpoint.ClusterLoadAssignment) *cluster.Cluster {
+func (ds *discoveryService) makeClusterConfig(name string, loadAssignment *endpoint.ClusterLoadAssignment) *cluster.Cluster {
 	return &cluster.Cluster{
 		Name:                 name,
 		ConnectTimeout:       durationpb.New(250 * time.Millisecond), // @TODO voir pour un timeout configurable
@@ -260,29 +261,33 @@ func makeClusterConfig(name string, loadAssignment *endpoint.ClusterLoadAssignme
 	}
 }
 
-// @TODO un port c'est pas un int32 non ?
-func makeEndpointConfig(clusterName string, ipAddress string, port int32) *endpoint.ClusterLoadAssignment {
+func (ds *discoveryService) makeEndpointConfig(clusterName string, endpoints []*endpoint.LbEndpoint) *endpoint.ClusterLoadAssignment {
 	return &endpoint.ClusterLoadAssignment{
 		ClusterName: clusterName,
-		Endpoints: []*endpoint.LocalityLbEndpoints{{
-			LbEndpoints: []*endpoint.LbEndpoint{{
-				HostIdentifier: &endpoint.LbEndpoint_Endpoint{
-					Endpoint: &endpoint.Endpoint{
-						Address: &core.Address{
-							Address: &core.Address_SocketAddress{
-								SocketAddress: &core.SocketAddress{
-									Protocol: core.SocketAddress_TCP,
-									Address:  ipAddress,
-									PortSpecifier: &core.SocketAddress_PortValue{
-										PortValue: uint32(port),
-									},
-								},
+		Endpoints: []*endpoint.LocalityLbEndpoints{
+			{ // @TODO on va utiliser ca a un moment
+				LbEndpoints: endpoints,
+			},
+		},
+	}
+}
+
+func (ds *discoveryService) addEndpoint(ipAddress string, port int32) *endpoint.LbEndpoint {
+	return &endpoint.LbEndpoint{
+		HostIdentifier: &endpoint.LbEndpoint_Endpoint{
+			Endpoint: &endpoint.Endpoint{
+				Address: &core.Address{
+					Address: &core.Address_SocketAddress{
+						SocketAddress: &core.SocketAddress{
+							Address: ipAddress,
+							PortSpecifier: &core.SocketAddress_PortValue{
+								PortValue: uint32(port),
 							},
 						},
 					},
 				},
-			}},
-		}},
+			},
+		},
 	}
 }
 
