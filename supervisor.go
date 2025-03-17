@@ -4,9 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"time"
 
-	"github.com/google/uuid"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
@@ -34,36 +32,36 @@ func supervisor() {
 		log.Println("bouh supervisoooooooooooooooor", feature)
 	}
 
-	newUUID := uuid.New()
-	shortUUID := newUUID.String()[:8]
+	// newUUID := uuid.New()
+	// shortUUID := newUUID.String()[:8]
 
-	startRequest := &protoContainer.ContainerStartRequest{
-		Image: "192.168.1.39:50000/smallapp:0.3",
-		Name:  "noyra-smallapp-" + shortUUID,
-		Labels: map[string]string{
-			"traefik.http.routers.smallapp.rule":                      "Host(`smallapp.local`)",
-			"traefik.http.services.smallapp.loadbalancer.server.port": "80",
-		},
-		ExposedPorts: map[uint32]string{
-			80: "tcp",
-		},
-	}
+	// startRequest := &protoContainer.ContainerStartRequest{
+	// 	Image: "192.168.1.39:50000/smallapp:0.3",
+	// 	Name:  "noyra-smallapp-" + shortUUID,
+	// 	Labels: map[string]string{
+	// 		"traefik.http.routers.smallapp.rule":                      "Host(`smallapp.local`)",
+	// 		"traefik.http.services.smallapp.loadbalancer.server.port": "80",
+	// 	},
+	// 	ExposedPorts: map[uint32]string{
+	// 		80: "tcp",
+	// 	},
+	// }
 
-	// Contact the server and print out its response.
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	r, err := c.ContainerStart(ctx, startRequest)
-	if err != nil {
-		log.Fatalf("could not greet: %v", err)
-	}
-	log.Printf("Greeting: %s", r.Status)
+	// // Contact the server and print out its response.
+	// ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	// defer cancel()
+	// r, err := c.ContainerStart(ctx, startRequest)
+	// if err != nil {
+	// 	log.Fatalf("could not greet: %v", err)
+	// }
+	// log.Printf("Greeting: %s", r.Status)
 
-	listResponse, _ := c.ContainerList(ctx, &protoContainer.ContainerListRequest{})
+	// listResponse, _ := c.ContainerList(ctx, &protoContainer.ContainerListRequest{})
 
-	log.Println("Containers list")
-	for _, containerInfo := range listResponse.GetContainers() {
-		log.Printf("ID: %s\tNAME: %s\n", containerInfo.GetId(), containerInfo.GetName())
-		//c.Stop(ctx, &protoContainer.StopRequest{ContainerId: containerInfo.GetId()})
-		//c.Remove(ctx, &protoContainer.RemoveRequest{ContainerId: containerInfo.GetId()})
-	}
+	// log.Println("Containers list")
+	// for _, containerInfo := range listResponse.GetContainers() {
+	// 	log.Printf("ID: %s\tNAME: %s\n", containerInfo.GetId(), containerInfo.GetName())
+	// 	//c.Stop(ctx, &protoContainer.StopRequest{ContainerId: containerInfo.GetId()})
+	// 	//c.Remove(ctx, &protoContainer.RemoveRequest{ContainerId: containerInfo.GetId()})
+	// }
 }
