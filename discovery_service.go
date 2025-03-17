@@ -36,6 +36,7 @@ type discoveryService struct {
 	clusterCache cache.SnapshotCache
 	nodeID       string
 	agent        *agent
+	resources    map[string]map[resource.Type][]types.Resource
 }
 
 func BuildDiscoveryService(ctx context.Context, nodeID string, agent *agent) *discoveryService {
@@ -43,6 +44,7 @@ func BuildDiscoveryService(ctx context.Context, nodeID string, agent *agent) *di
 		clusterCache: cache.NewSnapshotCache(false, cache.IDHash{}, nil),
 		nodeID:       nodeID,
 		agent:        agent,
+		resources:    make(map[string]map[resource.Type][]types.Resource),
 	}
 
 	// @TODO est ce que le ctx a une utilité ici ?
@@ -105,20 +107,52 @@ func (ds *discoveryService) init(ctx context.Context) {
 		return
 	}
 
-	resources := make(map[resource.Type][]types.Resource)
-
 	for _, container := range containers.Containers {
 		if container.Labels["noyra.type"] == "http" {
-			loadAssignment := makeEndpointConfig(container.Name, container.IPAddress, container.ExposedPort)
-
-			resources[resource.ListenerType] = append(resources[resource.ListenerType], makeListenerConfig(container.Name))
-			resources[resource.RouteType] = append(resources[resource.RouteType], makeRouteConfig(container.Name))
-			resources[resource.ClusterType] = append(resources[resource.ClusterType], makeClusterConfig(container.Name, loadAssignment))
+			ds.addCluster(container)
 		}
 	}
 
 	// @TODO est ce que le ctx a une utilité ici ?
-	ds.SetSnapshot(ctx, resources)
+	ds.SetSnapshot(ctx, ds.getResourcesForSnapshot())
+}
+
+func (ds *discoveryService) getResourcesForSnapshot() map[resource.Type][]types.Resource {
+	resources := make(map[resource.Type][]types.Resource)
+
+	for _, resource := range ds.resources {
+		for resourceType, resourceList := range resource {
+			resources[resourceType] = append(resources[resourceType], resourceList...)
+		}
+	}
+
+	return resources
+}
+
+func (ds *discoveryService) addCluster(container *protoAgent.ContainerInfo) {
+	clusterName, ok := container.Labels["noyra.cluster"]
+
+	if !ok {
+		clusterName = container.Name
+	}
+
+	if ds.resources[clusterName] != nil {
+		return
+	}
+
+	clusterDomain, ok := container.Labels["noyra.domain"]
+
+	if !ok {
+		clusterDomain = container.Name
+	}
+
+	resources := make(map[resource.Type][]types.Resource)
+	loadAssignment := makeEndpointConfig(clusterName, container.IPAddress, container.ExposedPort)
+	resources[resource.ListenerType] = append(resources[resource.ListenerType], makeListenerConfig(container.Name))
+	resources[resource.RouteType] = append(resources[resource.RouteType], makeRouteConfig(clusterName, clusterDomain, container.Name))
+	resources[resource.ClusterType] = append(resources[resource.ClusterType], makeClusterConfig(clusterName, loadAssignment))
+
+	ds.resources[clusterName] = resources
 }
 
 func makeConfigSource() *core.ConfigSource {
@@ -188,12 +222,12 @@ func makeListenerConfig(name string) *listener.Listener {
 	}
 }
 
-func makeRouteConfig(name string) *route.RouteConfiguration {
+func makeRouteConfig(clusterName string, clusterDomain string, name string) *route.RouteConfiguration {
 	return &route.RouteConfiguration{
 		Name: name,
 		VirtualHosts: []*route.VirtualHost{{
 			Name:    name,
-			Domains: []string{name + ":10000"}, // @TODO voir pour un port configurable
+			Domains: []string{clusterDomain + ":10000"}, // @TODO voir pour un port configurable
 			Routes: []*route.Route{{
 				Match: &route.RouteMatch{
 					PathSpecifier: &route.RouteMatch_Prefix{
@@ -203,7 +237,7 @@ func makeRouteConfig(name string) *route.RouteConfiguration {
 				Action: &route.Route_Route{
 					Route: &route.RouteAction{
 						ClusterSpecifier: &route.RouteAction_Cluster{
-							Cluster: name,
+							Cluster: clusterName,
 						},
 						// HostRewriteSpecifier: &route.RouteAction_HostRewriteLiteral{
 						// 	HostRewriteLiteral: "yoloooooo",
@@ -227,9 +261,9 @@ func makeClusterConfig(name string, loadAssignment *endpoint.ClusterLoadAssignme
 }
 
 // @TODO un port c'est pas un int32 non ?
-func makeEndpointConfig(name string, ipAddress string, port int32) *endpoint.ClusterLoadAssignment {
+func makeEndpointConfig(clusterName string, ipAddress string, port int32) *endpoint.ClusterLoadAssignment {
 	return &endpoint.ClusterLoadAssignment{
-		ClusterName: name,
+		ClusterName: clusterName,
 		Endpoints: []*endpoint.LocalityLbEndpoints{{
 			LbEndpoints: []*endpoint.LbEndpoint{{
 				HostIdentifier: &endpoint.LbEndpoint_Endpoint{
@@ -261,8 +295,33 @@ func (ds *discoveryService) eventListener(ctx context.Context) {
 	}
 
 	for {
-		feature, _ := stream.Recv()
-		log.Println("bouh discovery service", feature)
+		event, err := stream.Recv()
+
+		if err != nil {
+			slog.LogAttrs(ctx, slog.LevelWarn, "Failed to listen for container events", slog.Any("error", err))
+			continue
+		}
+
+		if event.Action != "start" {
+			continue
+		}
+
+		containersList, err := ds.agent.Direct.ContainerList(ctx, &protoAgent.ContainerListRequest{ContainersId: []string{event.Id}})
+
+		if err != nil {
+			slog.LogAttrs(ctx, slog.LevelWarn, "Failed to get container labels", slog.Any("error", err))
+			continue
+		}
+
+		container, ok := containersList.GetContainers()[event.Id]
+		if !ok {
+			continue
+		}
+
+		ds.addCluster(container)
+		ds.SetSnapshot(ctx, ds.getResourcesForSnapshot())
+
+		log.Println("bouh discovery service", event)
 	}
 }
 

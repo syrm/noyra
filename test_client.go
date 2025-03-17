@@ -8,6 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"math/rand"
 	"os"
 	"time"
 
@@ -41,34 +42,30 @@ func main() {
 	case "start":
 		startCmd.Parse(os.Args[2:])
 
-		// Créer un conteneur de test (NGINX)
-		startRequest := &protoContainer.ContainerStartRequest{
-			Name:  "test-nginx",
-			Image: "nginx:latest",
-			ExposedPorts: map[uint32]string{
-				80: "TCP",
-			},
-			Labels: map[string]string{
-				"app":        "test",
-				"service":    "web",
-				"noyra.type": "http",
-			},
-		}
+		for range 2 {
+			// Créer un conteneur de test (NGINX)
+			startRequest := &protoContainer.ContainerStartRequest{
+				Name:  "test-nginx-" + ContainerNameHash(),
+				Image: "nginx:latest",
+				ExposedPorts: map[uint32]string{
+					80: "TCP",
+				},
+				Labels: map[string]string{
+					"app":           "test",
+					"service":       "web",
+					"noyra.type":    "http",
+					"noyra.cluster": "web",
+					"noyra.domain":  "test-nginx",
+				},
+			}
 
-		resp, err := client.ContainerStart(ctx, startRequest)
-		if err != nil {
-			log.Fatalf("Erreur lors du démarrage du conteneur: %v", err)
-		}
+			resp, err := client.ContainerStart(ctx, startRequest)
+			if err != nil {
+				log.Fatalf("Erreur lors du démarrage du conteneur: %v", err)
+			}
 
-		fmt.Printf("Réponse: %s\n", resp.Status)
-		fmt.Printf("Message: %s\n", resp.Message)
-
-		if resp.Status == "OK" {
-			fmt.Println("\nLe conteneur a été démarré avec succès.")
-			fmt.Println("Pour vérifier que le service discovery fonctionne:")
-			fmt.Println("1. Attendez quelques secondes pour que le service discovery détecte le conteneur")
-			fmt.Println("2. Vérifiez les logs du service pour voir s'il y a des mises à jour envoyées à Envoy")
-			fmt.Println("3. Essayez d'accéder au service via le proxy Envoy (port 10000)")
+			fmt.Printf("Réponse: %s\n", resp.Status)
+			fmt.Printf("Message: %s\n", resp.Message)
 		}
 
 	case "list":
@@ -84,4 +81,38 @@ func main() {
 		fmt.Println("Utilisation: go run test_client.go [start|list]")
 		os.Exit(1)
 	}
+}
+
+var rng = rand.New(rand.NewSource(time.Now().UnixNano()))
+
+const (
+	// We omit vowels from the set of available characters to reduce the chances
+	// of "bad words" being formed.
+	alphanums = "bcdfghjklmnpqrstvwxz2456789"
+	// No. of bits required to index into alphanums string.
+	alphanumsIdxBits = 5
+	// Mask used to extract last alphanumsIdxBits of an int.
+	alphanumsIdxMask = 1<<alphanumsIdxBits - 1
+	// No. of random letters we can extract from a single int63.
+	maxAlphanumsPerInt = 63 / alphanumsIdxBits
+)
+
+// @TODO attention si appelé dans goroutine soucis de concurrence
+func ContainerNameHash() string {
+	b := make([]byte, 5)
+
+	randomInt63 := rng.Int63()
+	remaining := maxAlphanumsPerInt
+	for i := 0; i < 5; {
+		if remaining == 0 {
+			randomInt63, remaining = rng.Int63(), maxAlphanumsPerInt
+		}
+		if idx := int(randomInt63 & alphanumsIdxMask); idx < len(alphanums) {
+			b[i] = alphanums[idx]
+			i++
+		}
+		randomInt63 >>= alphanumsIdxBits
+		remaining--
+	}
+	return string(b)
 }
