@@ -28,10 +28,17 @@ message ContainerRemoveRequest {
   string containerId = 1;
 }
 
-message ContainerListRequest {}
+message ContainerInfoRequest {
+  string containerId = 1;
+}
+
+
+message ContainerListRequest {
+  repeated string containersId = 1;
+}
 
 message ContainerListResponse {
-  repeated ContainerInfo containers = 1;
+  map<string, ContainerInfo> containers = 1;
 }
 
 message ContainerInfo {

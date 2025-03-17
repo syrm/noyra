@@ -232,14 +232,20 @@ func (cs *agent) ContainerRemove(ctx context.Context, removeRequest *protoAgent.
 }
 
 func (cs *agent) ContainerList(ctx context.Context, listRequest *protoAgent.ContainerListRequest) (*protoAgent.ContainerListResponse, error) {
-	podmanContainers, err := containers.List(cs.podmanContext, &containers.ListOptions{})
+	filters := make(map[string][]string)
+
+	for _, containerId := range listRequest.GetContainersId() {
+		filters["id"] = append(filters["id"], containerId)
+	}
+
+	podmanContainers, err := containers.List(cs.podmanContext, &containers.ListOptions{Filters: filters})
 	if err != nil {
 		slog.LogAttrs(ctx, slog.LevelError, "Error listing containers",
 			slog.Any("error", err))
 		return nil, err
 	}
 
-	var containersInfo []*protoAgent.ContainerInfo
+	containersList := make(map[string]*protoAgent.ContainerInfo)
 
 	for _, c := range podmanContainers {
 		var exposedPort int32
@@ -259,16 +265,16 @@ func (cs *agent) ContainerList(ctx context.Context, listRequest *protoAgent.Cont
 			}
 		}
 
-		containersInfo = append(containersInfo, &protoAgent.ContainerInfo{
+		containersList[c.ID] = &protoAgent.ContainerInfo{
 			Id:          c.ID,
 			Name:        c.Names[0],
 			Labels:      c.Labels,
 			ExposedPort: exposedPort,
 			IPAddress:   ipAddress,
-		})
+		}
 	}
 
-	return &protoAgent.ContainerListResponse{Containers: containersInfo}, nil
+	return &protoAgent.ContainerListResponse{Containers: containersList}, nil
 }
 
 func (cs *agent) ContainerListener(in *protoAgent.ContainerListenerRequest, stream protoAgent.Agent_ContainerListenerServer) error {
