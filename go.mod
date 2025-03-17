@@ -7,6 +7,7 @@ require (
 	github.com/containers/podman/v5 v5.4.1
 	github.com/envoyproxy/go-control-plane v0.13.4
 	github.com/envoyproxy/go-control-plane/envoy v1.32.4
+	github.com/fullstorydev/grpchan v1.1.1
 	github.com/google/uuid v1.6.0
 	github.com/opencontainers/runtime-spec v1.2.0
 	google.golang.org/grpc v1.71.0
@@ -53,7 +54,6 @@ require (
 	github.com/envoyproxy/protoc-gen-validate v1.2.1 // indirect
 	github.com/felixge/httpsnoop v1.0.4 // indirect
 	github.com/fsnotify/fsnotify v1.8.0 // indirect
-	github.com/fullstorydev/grpchan v1.1.1 // indirect
 	github.com/go-jose/go-jose/v4 v4.0.5 // indirect
 	github.com/go-logr/logr v1.4.2 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
@@ -77,8 +77,6 @@ require (
 	github.com/gorilla/schema v1.4.1 // indirect
 	github.com/hashicorp/errwrap v1.1.0 // indirect
 	github.com/hashicorp/go-multierror v1.1.1 // indirect
-	github.com/jhump/gopoet v0.1.0 // indirect
-	github.com/jhump/goprotoc v0.5.0 // indirect
 	github.com/jhump/protoreflect v1.11.0 // indirect
 	github.com/jinzhu/copier v0.4.0 // indirect
 	github.com/josharian/intern v1.0.0 // indirect

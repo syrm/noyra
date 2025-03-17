@@ -79,11 +79,11 @@ func (cs *agent) ContainerStart(ctx context.Context, startRequest *protoAgent.Co
 	cs.pullImage(ctx, startRequest)
 
 	networkExists := false
-	networks, err := network.List(cs.podmanContext, &network.ListOptions{})
-	if err != nil {
+	networks, errList := network.List(cs.podmanContext, &network.ListOptions{})
+	if errList != nil {
 		slog.LogAttrs(ctx, slog.LevelError, "Error checking networks",
-			slog.Any("error", err))
-		return &protoAgent.Response{Status: "KO"}, fmt.Errorf("error checking networks: %v", err)
+			slog.Any("error", errList))
+		return &protoAgent.Response{Status: "KO"}, fmt.Errorf("error checking networks: %v", errList)
 	}
 
 	for _, net := range networks {
@@ -92,9 +92,9 @@ func (cs *agent) ContainerStart(ctx context.Context, startRequest *protoAgent.Co
 			if net.Driver != "bridge" {
 				slog.LogAttrs(ctx, slog.LevelWarn, "Network noyra exists but is not configured in bridge mode",
 					slog.String("currentDriver", net.Driver))
-				_, err := network.Remove(cs.podmanContext, "noyra", &network.RemoveOptions{})
-				if err != nil {
-					return &protoAgent.Response{Status: "KO"}, fmt.Errorf("unable to remove non-bridge noyra network: %v", err)
+				_, errRemove := network.Remove(cs.podmanContext, "noyra", &network.RemoveOptions{})
+				if errRemove != nil {
+					return &protoAgent.Response{Status: "KO"}, fmt.Errorf("unable to remove non-bridge noyra network: %v", errRemove)
 				}
 				networkExists = false
 			}
@@ -172,10 +172,10 @@ func (cs *agent) ContainerStart(ctx context.Context, startRequest *protoAgent.Co
 		}
 	}
 
-	response, err := containers.CreateWithSpec(cs.podmanContext, &containerSpec, nil)
+	response, errList := containers.CreateWithSpec(cs.podmanContext, &containerSpec, nil)
 
-	if err != nil {
-		return &protoAgent.Response{Status: "KO"}, err
+	if errList != nil {
+		return &protoAgent.Response{Status: "KO"}, errList
 	}
 
 	containerID := response.ID

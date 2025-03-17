@@ -90,7 +90,6 @@ func (ds *discoveryService) SetSnapshot(ctx context.Context, resources map[resou
 	err = ds.clusterCache.SetSnapshot(ctx, ds.nodeID, snapshot)
 
 	if err != nil {
-		panic(err)
 		slog.LogAttrs(ctx, slog.LevelError, "Failed to set snapshot", slog.Any("error", err))
 		return false
 	}
