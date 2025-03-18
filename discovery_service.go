@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"log"
 	"log/slog"
 	"net"
 	"os"
@@ -307,26 +306,28 @@ func (ds *discoveryService) eventListener(ctx context.Context) {
 			continue
 		}
 
-		if event.Action != "start" {
+		if event.Action == "start" || event.Action == "create" {
+			containersList, err := ds.agent.Direct.ContainerList(ctx, &protoAgent.ContainerListRequest{ContainersId: []string{event.Id}})
+
+			if err != nil {
+				slog.LogAttrs(ctx, slog.LevelWarn, "Failed to get container labels", slog.Any("error", err))
+				continue
+			}
+
+			container, ok := containersList.GetContainers()[event.Id]
+			if !ok {
+				continue
+			}
+
+			ds.addCluster(container)
+			ds.SetSnapshot(ctx, ds.getResourcesForSnapshot())
 			continue
 		}
 
-		containersList, err := ds.agent.Direct.ContainerList(ctx, &protoAgent.ContainerListRequest{ContainersId: []string{event.Id}})
-
-		if err != nil {
-			slog.LogAttrs(ctx, slog.LevelWarn, "Failed to get container labels", slog.Any("error", err))
+		if event.Action == "die" || event.Action == "stop" {
+			// @TODO a faire
 			continue
 		}
-
-		container, ok := containersList.GetContainers()[event.Id]
-		if !ok {
-			continue
-		}
-
-		ds.addCluster(container)
-		ds.SetSnapshot(ctx, ds.getResourcesForSnapshot())
-
-		log.Println("bouh discovery service", event)
 	}
 }
 

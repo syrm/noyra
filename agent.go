@@ -106,7 +106,18 @@ func (cs *agent) ContainerStart(ctx context.Context, startRequest *protoAgent.Co
 		networkCreate, err := network.Create(cs.podmanContext, &nettypes.Network{
 			Name:   "noyra",
 			Driver: "bridge",
+			Subnets: []nettypes.Subnet{
+				{
+					Subnet: nettypes.IPNet{
+						IPNet: net.IPNet{
+							IP:   net.ParseIP("10.66.0.0"),
+							Mask: net.CIDRMask(16, 32),
+						},
+					},
+				},
+			},
 		})
+
 		if err != nil {
 			slog.LogAttrs(ctx, slog.LevelError, "Error creating noyra network",
 				slog.Any("error", err))
@@ -233,10 +244,7 @@ func (cs *agent) ContainerRemove(ctx context.Context, removeRequest *protoAgent.
 
 func (cs *agent) ContainerList(ctx context.Context, listRequest *protoAgent.ContainerListRequest) (*protoAgent.ContainerListResponse, error) {
 	filters := make(map[string][]string)
-
-	for _, containerId := range listRequest.GetContainersId() {
-		filters["id"] = append(filters["id"], containerId)
-	}
+	filters["id"] = append(filters["id"], listRequest.GetContainersId()...)
 
 	podmanContainers, err := containers.List(cs.podmanContext, &containers.ListOptions{Filters: filters})
 	if err != nil {
