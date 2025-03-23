@@ -1,0 +1,282 @@
+title: "Noyra Architecture - Podman Orchestrator/Scheduler" {
+  near: top-center
+  shape: text
+  style: {
+    font-size: 24
+  }
+}
+
+# Main Components
+NoyraMain: "Noyra Main" {
+  shape: rectangle
+  style: {
+    fill: "#e5f5f9"
+    stroke: "#0099cc"
+    stroke-width: 2
+  }
+
+  main: "main.go" {
+    shape: rectangle
+    style: {
+      fill: white
+      stroke: "#0099cc"
+      stroke-dash: 5
+    }
+  }
+
+  agent: "agent.go" {
+    shape: rectangle
+    style: {
+      fill: white
+      stroke: "#0099cc"
+      stroke-dash: 5
+    }
+  }
+
+  supervisorService: "supervisor.go" {
+    shape: rectangle
+    style: {
+      fill: white
+      stroke: "#0099cc"
+      stroke-dash: 5
+    }
+  }
+
+  discoveryService: "discovery_service.go" {
+    shape: rectangle
+    style: {
+      fill: white
+      stroke: "#0099cc"
+      stroke-dash: 5
+    }
+  }
+
+  configDir: "config/" {
+    style: {
+      fill: "#ffffcc"
+      stroke: "#cccc00"
+    }
+
+    envoyConfig: "envoy.yaml" {
+      shape: document
+      style: {
+        fill: white
+        stroke: "#cccc00"
+      }
+    }
+  }
+
+  protoDir: "grpc-proto/" {
+    style: {
+      fill: "#ffffcc"
+      stroke: "#cccc00"
+    }
+
+    agentProto: "agent.proto" {
+      shape: document
+    }
+  }
+}
+
+# Container Components
+Containers: "Container Services" {
+  shape: rectangle
+  style: {
+    fill: "#f9e5f5"
+    stroke: "#cc0099"
+    stroke-width: 2
+  }
+
+  podman: "Podman API" {
+    shape: rectangle
+    style: {
+      fill: white
+      stroke: "#cc0099"
+    }
+  }
+
+  envoy: "Envoy Proxy" {
+    shape: rectangle
+    style: {
+      fill: white
+      stroke: "#cc0099"
+    }
+  }
+
+  nginx: "Nginx Instances" {
+    shape: rectangle
+    style: {
+      fill: white
+      stroke: "#cc0099"
+    }
+
+    nginx1: "nginx-1" {
+      shape: rectangle
+    }
+
+    nginx2: "nginx-2" {
+      shape: rectangle
+    }
+
+    nginxN: "nginx-n" {
+      shape: rectangle
+    }
+
+    nginx1 -- nginx2 -- nginxN: {
+      style: {
+        stroke-dash: 3
+      }
+    }
+  }
+
+  network: "Noyra Network (Bridge)" {
+    shape: rectangle
+    style: {
+      fill: "#ccffcc"
+      stroke: "#00cc00"
+    }
+  }
+}
+
+# Flow and Relationship
+NoyraMain.main -> NoyraMain.agent: "Initializes"
+NoyraMain.main -> NoyraMain.discoveryService: "Initializes"
+NoyraMain.main -> NoyraMain.supervisorService: "Initializes"
+NoyraMain.agent -> Containers.podman: "Manages via API"
+NoyraMain.agent -> Containers.network: "Creates and configures"
+NoyraMain.agent -> Containers.envoy: "Starts and configures"
+NoyraMain.agent -> Containers.nginx: "Creates instances"
+NoyraMain.discoveryService -> Containers.envoy: "xDS protocol"
+Containers.envoy -> Containers.nginx: "Load balances (Round Robin)"
+NoyraMain.configDir.envoyConfig -> Containers.envoy: "Configures"
+
+# Add supervisor orchestration flow
+NoyraMain.supervisorService -> NoyraMain.agent: "Issues orders to deploy/remove containers" {
+  style: {
+    stroke: "#8a2be2"
+    stroke-width: 2
+  }
+}
+
+NoyraMain.supervisorService -> Containers.nginx: "Monitors health/status" {
+  style: {
+    stroke: "#8a2be2"
+    stroke-width: 2
+    stroke-dash: 5
+  }
+}
+
+# Connection explanations
+NoyraMain.agent -> Containers.podman: "GRPC :4646" {
+  style: {
+    stroke: "#ff0000"
+    stroke-width: 2
+  }
+}
+
+Containers.envoy -> Containers.nginx: "Round-Robin Load Balancing" {
+  style: {
+    stroke: "#ff9900"
+    stroke-width: 2
+  }
+}
+
+NoyraMain.discoveryService -> Containers.envoy: "xDS API (gRPC :18000)" {
+  style: {
+    stroke: "#00cc00"
+    stroke-width: 2
+  }
+}
+
+Client: "External Client" {
+  shape: person
+  style: {
+    fill: "#f5f5f5"
+  }
+}
+
+Client -> Containers.envoy: "HTTP Requests" {
+  style: {
+    stroke: "#0000ff"
+    stroke-width: 2
+  }
+}
+
+# Legend
+Legend: {
+  shape: rectangle
+  style: {
+    fill: white
+    stroke: black
+  }
+
+  title: "Legend" {
+    shape: text
+  }
+
+  codeFiles: "Go Code Files" {
+    shape: rectangle
+    style: {
+      fill: white
+      stroke: "#0099cc"
+      stroke-dash: 5
+    }
+  }
+
+  configFiles: "Configuration Files" {
+    shape: rectangle
+    style: {
+      fill: white
+      stroke: "#cccc00"
+    }
+  }
+
+  containerServices: "Container Services" {
+    shape: rectangle
+    style: {
+      fill: white
+      stroke: "#cc0099"
+    }
+  }
+
+  network: "Network" {
+    shape: rectangle
+    style: {
+      fill: "#ccffcc"
+      stroke: "#00cc00"
+    }
+  }
+  
+  supervisorFlow: "Supervisor Control Flow" {
+    style: {
+      stroke: "#8a2be2"
+      stroke-width: 2
+    }
+  }
+  
+  supervisorMonitor: "Supervision/Monitoring" {
+    style: {
+      stroke: "#8a2be2"
+      stroke-width: 2
+      stroke-dash: 5
+    }
+  }
+}
+
+explanation: |md
+  Key Components:
+  - Agent: Manages container lifecycle via Podman API
+  - Discovery Service: Provides service discovery via Envoy xDS
+  - Supervisor: Monitors and manages container health
+    * Issues orders to Agent to deploy/remove containers (e.g., nginx)
+    * Monitors the health and status of containers
+  - Envoy: Front-proxy that load balances to multiple nginx instances
+  - Nginx: Web servers that can be scaled horizontally
+  - Noyra Network: Bridge network connecting all components
+| {
+  shape: text
+  near: bottom-right
+  style: {
+    font-size: 14
+  }
+}

@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	_ "embed"
 	"log"
 	"log/slog"
 	"os"
@@ -14,6 +15,9 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 )
+
+//go:embed schema.cue
+var embeddedSchema string
 
 func main() {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
@@ -48,7 +52,7 @@ func main() {
 	// 	time.Sleep(1 * time.Second)
 	// }
 
-	go supervisor()
+	go supervisor(agentService)
 
 	for {
 		time.Sleep(1 * time.Second)
@@ -69,6 +73,7 @@ func initNoyra() {
 		Name:  "noyra-envoy",
 		ExposedPorts: map[uint32]string{
 			10000: "tcp",
+			19001: "tcp",
 		},
 		Network: "noyra",
 	}
