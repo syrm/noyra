@@ -147,9 +147,6 @@ func (cs *agent) ContainerStart(ctx context.Context, startRequest *protoAgent.Co
 	response, errList := containers.CreateWithSpec(cs.podmanContext, &containerSpec, nil)
 
 	if errList != nil {
-		println("oups")
-		fmt.Printf("mounts %+v\n", mounts)
-		fmt.Printf("raw Mounts %+v\n", startRequest.GetMounts())
 		return &protoAgent.Response{Status: "KO"}, errList
 	}
 
