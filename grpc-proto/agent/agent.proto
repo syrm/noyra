@@ -27,7 +27,7 @@ message ContainerMount {
   string destination = 1;
 	string type = 2;
 	string source = 3;
-	repeated string Options = 4;
+	repeated string options = 4;
 }
 
 message ContainerPortMapping {
