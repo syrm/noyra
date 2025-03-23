@@ -114,7 +114,7 @@ func supervisor(agentService *agent) {
 			port := strings.Split(portWithProtocol, "/")
 
 			if len(port) == 1 {
-				port[1] = "tcp"
+				port = append(port, "tcp")
 			}
 
 			portUint32, _ := strconv.Atoi(port[0])
