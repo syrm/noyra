@@ -15,9 +15,24 @@ service Agent {
 message ContainerStartRequest {
   string image = 1;
   string name = 2;
-  map<string, string> labels = 3;
-  map<uint32, string> exposed_ports = 4;
-  string network = 5;
+  repeated string command = 3;
+  map<string, string> labels = 4;
+  map<uint32, string> exposed_ports = 5;
+  string network = 6;
+  repeated ContainerMount mounts = 7;
+  repeated ContainerPortMapping port_mappings = 8;
+}
+
+message ContainerMount {
+  string destination = 1;
+	string type = 2;
+	string source = 3;
+	repeated string options = 4;
+}
+
+message ContainerPortMapping {
+  uint32 container_port = 1;
+	uint32 host_port = 2;
 }
 
 message ContainerStopRequest {

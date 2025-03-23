@@ -1,0 +1,471 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Noyra Codebase Analysis Report</title>
+    <style>
+        :root {
+            --primary-color: #0071e3;
+            --secondary-color: #86868b;
+            --background-color: #f5f5f7;
+            --card-color: #ffffff;
+            --text-color: #1d1d1f;
+            --success-color: #34c759;
+            --warning-color: #ff9500;
+            --danger-color: #ff3b30;
+            --info-color: #5ac8fa;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+            background-color: var(--background-color);
+            color: var(--text-color);
+            line-height: 1.5;
+            margin: 0;
+            padding: 0;
+        }
+        
+        .container {
+            max-width: 1000px;
+            margin: 0 auto;
+            padding: 40px 20px;
+        }
+        
+        header {
+            text-align: center;
+            margin-bottom: 40px;
+        }
+        
+        h1 {
+            font-size: 48px;
+            font-weight: 700;
+            margin-bottom: 10px;
+        }
+        
+        h2 {
+            font-size: 28px;
+            font-weight: 600;
+            margin-top: 40px;
+            margin-bottom: 20px;
+        }
+        
+        h3 {
+            font-size: 20px;
+            font-weight: 600;
+            margin-top: 25px;
+            margin-bottom: 15px;
+        }
+        
+        .section {
+            background-color: var(--card-color);
+            border-radius: 18px;
+            padding: 30px;
+            margin-bottom: 30px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+        }
+        
+        .finding {
+            border-left: 4px solid var(--secondary-color);
+            padding: 15px 20px;
+            margin: 15px 0;
+            background-color: rgba(0, 0, 0, 0.02);
+            border-radius: 0 8px 8px 0;
+        }
+        
+        .finding.high {
+            border-left-color: var(--danger-color);
+        }
+        
+        .finding.medium {
+            border-left-color: var(--warning-color);
+        }
+        
+        .finding.low {
+            border-left-color: var(--info-color);
+        }
+        
+        .finding.good {
+            border-left-color: var(--success-color);
+        }
+        
+        .severity {
+            display: inline-block;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: 600;
+            margin-right: 10px;
+            color: white;
+        }
+        
+        .severity.high {
+            background-color: var(--danger-color);
+        }
+        
+        .severity.medium {
+            background-color: var(--warning-color);
+        }
+        
+        .severity.low {
+            background-color: var(--info-color);
+        }
+        
+        .severity.good {
+            background-color: var(--success-color);
+        }
+        
+        .finding-title {
+            font-weight: 600;
+            margin-bottom: 10px;
+        }
+        
+        .finding-description {
+            color: var(--secondary-color);
+        }
+        
+        .finding-solution {
+            margin-top: 10px;
+            font-style: italic;
+        }
+        
+        .progress-container {
+            margin: 30px 0;
+            text-align: center;
+        }
+        
+        .progress-item {
+            display: inline-block;
+            width: 22%;
+            margin: 0 1%;
+            text-align: center;
+        }
+        
+        .progress-circle {
+            position: relative;
+            width: 120px;
+            height: 120px;
+            border-radius: 50%;
+            background-color: #e0e0e0;
+            margin: 0 auto 15px;
+            overflow: hidden;
+        }
+        
+        .progress-circle::before {
+            content: '';
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            right: 10px;
+            bottom: 10px;
+            background-color: white;
+            border-radius: 50%;
+            z-index: 1;
+        }
+        
+        .progress-circle::after {
+            content: attr(data-percent) '%';
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            z-index: 2;
+            font-size: 24px;
+            font-weight: 700;
+        }
+        
+        .progress-fill {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            transform-origin: center;
+        }
+        
+        .progress-label {
+            font-weight: 600;
+            font-size: 16px;
+        }
+        
+        .architecture .progress-fill {
+            background: conic-gradient(var(--primary-color) 0% 75%, #e0e0e0 75% 100%);
+        }
+        
+        .best-practices .progress-fill {
+            background: conic-gradient(var(--primary-color) 0% 65%, #e0e0e0 65% 100%);
+        }
+        
+        .security .progress-fill {
+            background: conic-gradient(var(--primary-color) 0% 60%, #e0e0e0 60% 100%);
+        }
+        
+        .performance .progress-fill {
+            background: conic-gradient(var(--primary-color) 0% 80%, #e0e0e0 80% 100%);
+        }
+        
+        footer {
+            text-align: center;
+            margin-top: 50px;
+            color: var(--secondary-color);
+            font-size: 14px;
+        }
+        
+        .code-example {
+            background-color: #f8f8f8;
+            border-radius: 6px;
+            padding: 15px;
+            margin: 10px 0;
+            font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, Courier, monospace;
+            font-size: 14px;
+            overflow-x: auto;
+            white-space: pre;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Noyra Codebase Analysis</h1>
+            <p>A comprehensive review of your Go project</p>
+        </header>
+        
+        <div class="progress-container">
+            <div class="progress-item">
+                <div class="progress-circle architecture" data-percent="75">
+                    <div class="progress-fill"></div>
+                </div>
+                <div class="progress-label">Architecture</div>
+            </div>
+            <div class="progress-item">
+                <div class="progress-circle best-practices" data-percent="65">
+                    <div class="progress-fill"></div>
+                </div>
+                <div class="progress-label">Best Practices</div>
+            </div>
+            <div class="progress-item">
+                <div class="progress-circle security" data-percent="60">
+                    <div class="progress-fill"></div>
+                </div>
+                <div class="progress-label">Security</div>
+            </div>
+            <div class="progress-item">
+                <div class="progress-circle performance" data-percent="80">
+                    <div class="progress-fill"></div>
+                </div>
+                <div class="progress-label">Performance</div>
+            </div>
+        </div>
+        
+        <div class="section">
+            <h2>Overview</h2>
+            <p>Noyra appears to be a containerization management system using Podman as the backend. It provides a gRPC-based API for managing containers, with both agent and discovery service components.</p>
+            <p>The codebase is well-structured but has several areas for improvement in terms of architecture design, error handling, and code organization.</p>
+        </div>
+        
+        <div class="section">
+            <h2>Architecture Analysis</h2>
+            
+            <div class="finding medium">
+                <span class="severity medium">Medium</span>
+                <div class="finding-title">Separation of Concerns</div>
+                <div class="finding-description">The agent.go file is handling too many responsibilities, mixing container operations, network management, and API handling.</div>
+                <div class="finding-solution">Consider refactoring into smaller, focused packages: container, network, and api.</div>
+            </div>
+            
+            <div class="finding medium">
+                <span class="severity medium">Medium</span>
+                <div class="finding-title">Lack of Interfaces</div>
+                <div class="finding-description">Direct dependencies on concrete implementations make testing difficult and create tight coupling.</div>
+                <div class="finding-solution">Introduce interfaces for the Podman client and container operations to allow for easier testing with mocks.</div>
+            </div>
+            
+            <div class="finding low">
+                <span class="severity low">Low</span>
+                <div class="finding-title">Configuration Management</div>
+                <div class="finding-description">Hardcoded values in the code for paths, network configurations, and ports.</div>
+                <div class="finding-solution">Implement a configuration package that loads settings from environment variables or config files.</div>
+            </div>
+            
+            <div class="finding good">
+                <span class="severity good">Good</span>
+                <div class="finding-title">Service Separation</div>
+                <div class="finding-description">Good separation between the agent and discovery service components.</div>
+            </div>
+        </div>
+        
+        <div class="section">
+            <h2>Best Practices</h2>
+            
+            <div class="finding high">
+                <span class="severity high">High</span>
+                <div class="finding-title">Error Handling</div>
+                <div class="finding-description">Inconsistent error handling patterns. Some errors are logged but ignored, others panic the application.</div>
+                <div class="finding-solution">Implement consistent error handling strategy. Avoid using panic() in production code.</div>
+                <div class="code-example">
+// Current problematic code
+if err != nil {
+    slog.LogAttrs(ctx, slog.LevelError, "Error pulling image",
+        slog.String("image", startRequest.GetImage()),
+        slog.Any("error", err))
+    panic(err.Error())
+}
+
+// Better approach
+if err != nil {
+    slog.LogAttrs(ctx, slog.LevelError, "Error pulling image",
+        slog.String("image", startRequest.GetImage()),
+        slog.Any("error", err))
+    return &protoAgent.Response{Status: "KO"}, fmt.Errorf("failed to pull image: %w", err)
+}
+</div>
+            </div>
+            
+            <div class="finding medium">
+                <span class="severity medium">Medium</span>
+                <div class="finding-title">Lack of Tests</div>
+                <div class="finding-description">The codebase appears to have minimal testing.</div>
+                <div class="finding-solution">Implement unit tests for core functionality and consider integration tests for container operations.</div>
+            </div>
+            
+            <div class="finding medium">
+                <span class="severity medium">Medium</span>
+                <div class="finding-title">Commented Code</div>
+                <div class="finding-description">There are commented-out code blocks in main.go that should be removed or implemented.</div>
+                <div class="finding-solution">Remove commented code or add explanatory comments if keeping it for future reference.</div>
+            </div>
+            
+            <div class="finding low">
+                <span class="severity low">Low</span>
+                <div class="finding-title">Code Documentation</div>
+                <div class="finding-description">Limited documentation for functions, types, and packages.</div>
+                <div class="finding-solution">Add GoDoc comments to all exported functions, types, and packages.</div>
+            </div>
+            
+            <div class="finding good">
+                <span class="severity good">Good</span>
+                <div class="finding-title">Logging</div>
+                <div class="finding-description">Good use of structured logging with slog.</div>
+            </div>
+        </div>
+        
+        <div class="section">
+            <h2>Security Analysis</h2>
+            
+            <div class="finding high">
+                <span class="severity high">High</span>
+                <div class="finding-title">Insecure gRPC Connection</div>
+                <div class="finding-description">Using insecure credentials in gRPC connections. This exposes your API to potential MITM attacks.</div>
+                <div class="finding-solution">Implement TLS for all gRPC connections.</div>
+                <div class="code-example">
+// Current insecure code
+conn, err := grpc.NewClient("localhost:4646", grpc.WithTransportCredentials(insecure.NewCredentials()))
+
+// More secure approach with TLS
+creds, err := credentials.NewServerTLSFromFile("server.crt", "server.key")
+if err != nil {
+    log.Fatalf("Failed to setup TLS: %v", err)
+}
+conn, err := grpc.NewClient("localhost:4646", grpc.WithTransportCredentials(creds))
+</div>
+            </div>
+            
+            <div class="finding medium">
+                <span class="severity medium">Medium</span>
+                <div class="finding-title">Hardcoded Socket Path</div>
+                <div class="finding-description">The Podman socket path is hardcoded, potentially leading to privilege escalation if the socket permissions are not properly set.</div>
+                <div class="finding-solution">Make the socket path configurable and validate it before connection.</div>
+            </div>
+            
+            <div class="finding medium">
+                <span class="severity medium">Medium</span>
+                <div class="finding-title">No Input Validation</div>
+                <div class="finding-description">Limited validation of inputs for container creation and management.</div>
+                <div class="finding-solution">Implement strict validation for all API input parameters.</div>
+            </div>
+            
+            <div class="finding low">
+                <span class="severity low">Low</span>
+                <div class="finding-title">Network Security</div>
+                <div class="finding-description">The network created for containers has a fixed subnet and configuration.</div>
+                <div class="finding-solution">Consider implementing network isolation and security controls for container networks.</div>
+            </div>
+        </div>
+        
+        <div class="section">
+            <h2>Performance Considerations</h2>
+            
+            <div class="finding medium">
+                <span class="severity medium">Medium</span>
+                <div class="finding-title">Resource Management</div>
+                <div class="finding-description">No limits set for container CPU and memory usage.</div>
+                <div class="finding-solution">Implement resource limits for containers to prevent DoS scenarios.</div>
+                <div class="code-example">
+containerSpec.ContainerResourceConfig = specgen.ContainerResourceConfig{
+    ResourceLimits: &spec.LinuxResources{
+        Memory: &spec.LinuxMemory{
+            Limit: int64Ptr(256 * 1024 * 1024), // 256MB
+        },
+        CPU: &spec.LinuxCPU{
+            Quota:  int64Ptr(100000),
+            Period: uint64Ptr(100000),
+        },
+    },
+}
+</div>
+            </div>
+            
+            <div class="finding low">
+                <span class="severity low">Low</span>
+                <div class="finding-title">Inefficient Container Listing</div>
+                <div class="finding-description">The container listing operation fetches all containers and then filters them, which could be inefficient with many containers.</div>
+                <div class="finding-solution">Use Podman's native filtering capabilities more effectively.</div>
+            </div>
+            
+            <div class="finding low">
+                <span class="severity low">Low</span>
+                <div class="finding-title">Context Management</div>
+                <div class="finding-description">Some operations use background contexts without timeouts.</div>
+                <div class="finding-solution">Use contexts with appropriate timeouts for operations that could hang.</div>
+            </div>
+            
+            <div class="finding good">
+                <span class="severity good">Good</span>
+                <div class="finding-title">Efficient Event Streaming</div>
+                <div class="finding-description">Good use of Podman's event streaming for container monitoring.</div>
+            </div>
+        </div>
+        
+        <div class="section">
+            <h2>Recommendations</h2>
+            <h3>Short Term</h3>
+            <ol>
+                <li>Fix high-severity security issues, particularly implementing TLS for gRPC connections</li>
+                <li>Improve error handling to avoid panics</li>
+                <li>Add basic validation for API inputs</li>
+                <li>Remove commented-out code</li>
+            </ol>
+            
+            <h3>Medium Term</h3>
+            <ol>
+                <li>Refactor agent.go into smaller, more focused packages</li>
+                <li>Implement configuration management</li>
+                <li>Add resource limits to container specifications</li>
+                <li>Add comprehensive unit and integration tests</li>
+            </ol>
+            
+            <h3>Long Term</h3>
+            <ol>
+                <li>Implement interfaces for better dependency injection and testing</li>
+                <li>Consider a more modular architecture with clearer separation of concerns</li>
+                <li>Improve security with authentication and authorization for the API</li>
+                <li>Add comprehensive metrics and monitoring</li>
+            </ol>
+        </div>
+        
+        <footer>
+            <p>Report generated on: <script>document.write(new Date().toLocaleDateString())</script></p>
+        </footer>
+    </div>
+</body>
+</html>
