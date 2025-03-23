@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"net"
 	"os"
-	"strings"
 	"time"
 
 	protoAgent "blackprism.org/noyra/grpc-proto/agent"
@@ -78,12 +77,98 @@ func (agentService *agent) Run() {
 func (cs *agent) ContainerStart(ctx context.Context, startRequest *protoAgent.ContainerStartRequest) (*protoAgent.Response, error) {
 	cs.pullImage(ctx, startRequest)
 
+	if err := cs.createNetwork(ctx); err != nil {
+		return &protoAgent.Response{Status: "KO"}, err
+	}
+
+	exposedPorts := make(map[uint16]string)
+
+	for i, exposedPort := range startRequest.GetExposedPorts() {
+		exposedPorts[uint16(i)] = exposedPort
+	}
+
+	mounts := make([]spec.Mount, 0, len(startRequest.GetMounts()))
+	fmt.Printf("mounts init %+v\n", mounts)
+	for _, m := range startRequest.GetMounts() {
+		mounts = append(mounts, spec.Mount{
+			Destination: m.GetDestination(),
+			Source:      m.GetSource(),
+			Type:        m.GetType(),
+			Options:     m.GetOptions(),
+		})
+	}
+
+	portMappings := make([]nettypes.PortMapping, 0, len(startRequest.GetPortMappings()))
+	for _, p := range startRequest.GetPortMappings() {
+		portMappings = append(portMappings, nettypes.PortMapping{
+			ContainerPort: uint16(p.GetContainerPort()),
+			HostPort:      uint16(p.GetHostPort()),
+		})
+	}
+
+	var memoryLimit int64 = 100_000_000 // 100mb
+	var cpuQuota int64 = 10_000         // 10ms cpu
+	var cpuPeriod uint64 = 1_000_000
+
+	containerSpec := specgen.SpecGenerator{
+		ContainerBasicConfig: specgen.ContainerBasicConfig{
+			Name:    startRequest.GetName(),
+			Labels:  startRequest.GetLabels(),
+			Command: startRequest.GetCommand(),
+		},
+		ContainerStorageConfig: specgen.ContainerStorageConfig{
+			Image:   startRequest.GetImage(),
+			Volumes: []*specgen.NamedVolume{},
+			Mounts:  mounts,
+		},
+		ContainerNetworkConfig: specgen.ContainerNetworkConfig{
+			Expose: exposedPorts,
+			NetNS: specgen.Namespace{
+				NSMode: specgen.Bridge,
+			},
+			Networks: map[string]nettypes.PerNetworkOptions{
+				"noyra": {},
+			},
+			PortMappings: portMappings,
+		},
+		ContainerResourceConfig: specgen.ContainerResourceConfig{
+			ResourceLimits: &spec.LinuxResources{
+				Memory: &spec.LinuxMemory{
+					Limit: &memoryLimit,
+				},
+				CPU: &spec.LinuxCPU{
+					Quota:  &cpuQuota,
+					Period: &cpuPeriod,
+				},
+			},
+		},
+	}
+
+	response, errList := containers.CreateWithSpec(cs.podmanContext, &containerSpec, nil)
+
+	if errList != nil {
+		println("oups")
+		fmt.Printf("mounts %+v\n", mounts)
+		fmt.Printf("raw Mounts %+v\n", startRequest.GetMounts())
+		return &protoAgent.Response{Status: "KO"}, errList
+	}
+
+	containerID := response.ID
+	slog.LogAttrs(ctx, slog.LevelInfo, "Container created",
+		slog.String("id", containerID))
+
+	containers.Start(cs.podmanContext, containerID, &containers.StartOptions{})
+
+	return &protoAgent.Response{Status: "OK"}, nil
+}
+
+func (cs *agent) createNetwork(ctx context.Context) error {
 	networkExists := false
 	networks, errList := network.List(cs.podmanContext, &network.ListOptions{Filters: map[string][]string{"name": {"noyra"}}})
 	if errList != nil {
 		slog.LogAttrs(ctx, slog.LevelError, "Error checking networks",
 			slog.Any("error", errList))
-		return &protoAgent.Response{Status: "KO"}, fmt.Errorf("error checking networks: %v", errList)
+		return fmt.Errorf("error checking networks: %v", errList)
 	}
 
 	if len(networks) == 1 {
@@ -94,7 +179,7 @@ func (cs *agent) ContainerStart(ctx context.Context, startRequest *protoAgent.Co
 				slog.String("currentDriver", noyraNetwork.Driver))
 			_, errRemove := network.Remove(cs.podmanContext, "noyra", &network.RemoveOptions{})
 			if errRemove != nil {
-				return &protoAgent.Response{Status: "KO"}, fmt.Errorf("unable to remove non-bridge noyra network: %v", errRemove)
+				return fmt.Errorf("unable to remove non-bridge noyra network: %v", errRemove)
 			}
 			networkExists = false
 		}
@@ -119,81 +204,14 @@ func (cs *agent) ContainerStart(ctx context.Context, startRequest *protoAgent.Co
 		if err != nil {
 			slog.LogAttrs(ctx, slog.LevelError, "Error creating noyra network",
 				slog.Any("error", err))
-			return &protoAgent.Response{Status: "KO"}, fmt.Errorf("error creating noyra network: %v", err)
+			return fmt.Errorf("error creating noyra network: %v", err)
 		}
+
 		slog.LogAttrs(ctx, slog.LevelInfo, "Noyra network created successfully",
 			slog.Any("network", networkCreate))
 	}
 
-	exposedPorts := make(map[uint16]string)
-
-	for i, exposedPort := range startRequest.GetExposedPorts() {
-		println(i, exposedPort)
-		exposedPorts[uint16(i)] = exposedPort
-	}
-
-	configPath := "/mnt/data/src/go/noyra/config/envoy.yaml"
-
-	args := []string{}
-	if strings.Contains(startRequest.GetImage(), "envoyproxy/envoy") {
-		args = []string{"-c", "/config.yaml", "--drain-time-s", "5", "-l", "debug"}
-	}
-
-	containerSpec := specgen.SpecGenerator{
-		ContainerBasicConfig: specgen.ContainerBasicConfig{
-			Name:    startRequest.GetName(),
-			Labels:  startRequest.GetLabels(),
-			Command: args,
-		},
-		ContainerStorageConfig: specgen.ContainerStorageConfig{
-			Image:   startRequest.GetImage(),
-			Volumes: []*specgen.NamedVolume{},
-			Mounts: []spec.Mount{
-				{
-					Destination: "/config.yaml",
-					Type:        "bind",
-					Source:      configPath,
-					Options:     []string{"rbind", "ro"},
-				},
-			},
-		},
-		ContainerNetworkConfig: specgen.ContainerNetworkConfig{
-			Expose: exposedPorts,
-			NetNS: specgen.Namespace{
-				NSMode: specgen.Bridge,
-			},
-			Networks: map[string]nettypes.PerNetworkOptions{
-				"noyra": {},
-			},
-		},
-	}
-
-	if strings.Contains(startRequest.GetImage(), "envoyproxy/envoy") {
-		containerSpec.ContainerNetworkConfig.PortMappings = []nettypes.PortMapping{
-			{
-				ContainerPort: 10000,
-				HostPort:      10000,
-			},
-			{
-				ContainerPort: 19001,
-				HostPort:      19001,
-			},
-		}
-	}
-
-	response, errList := containers.CreateWithSpec(cs.podmanContext, &containerSpec, nil)
-
-	if errList != nil {
-		return &protoAgent.Response{Status: "KO"}, errList
-	}
-
-	containerID := response.ID
-	slog.LogAttrs(ctx, slog.LevelInfo, "Container created",
-		slog.String("id", containerID))
-
-	containers.Start(cs.podmanContext, containerID, &containers.StartOptions{})
-
-	return &protoAgent.Response{Status: "OK"}, nil
+	return nil
 }
 
 func (cs *agent) ContainerStop(ctx context.Context, stopRequest *protoAgent.ContainerStopRequest) (*protoAgent.Response, error) {

@@ -21,6 +21,7 @@ var embeddedSchema string
 
 func main() {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
+		AddSource: true,
 		ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
 			if len(groups) == 0 && a.Key == "time" {
 				return slog.Attr{}
@@ -68,14 +69,35 @@ func initNoyra() {
 	defer conn.Close()
 	c := protoContainer.NewAgentClient(conn)
 
+	configPath := "/mnt/data/src/go/noyra/config/envoy.yaml"
+
 	startRequest := &protoContainer.ContainerStartRequest{
-		Image: "envoyproxy/envoy:v1.33.0",
-		Name:  "noyra-envoy",
+		Image:   "envoyproxy/envoy:v1.33.0",
+		Name:    "noyra-envoy",
+		Command: []string{"-c", "/config.yaml", "--drain-time-s", "5", "-l", "debug"},
 		ExposedPorts: map[uint32]string{
 			10000: "tcp",
 			19001: "tcp",
 		},
 		Network: "noyra",
+		Mounts: []*protoContainer.ContainerMount{
+			{
+				Destination: "/config.yaml",
+				Type:        "bind",
+				Source:      configPath,
+				Options:     []string{"rbind", "ro"},
+			},
+		},
+		PortMappings: []*protoContainer.ContainerPortMapping{
+			{
+				ContainerPort: 10000,
+				HostPort:      10000,
+			},
+			{
+				ContainerPort: 19001,
+				HostPort:      19001,
+			},
+		},
 	}
 
 	// Contact the server and print out its response.
