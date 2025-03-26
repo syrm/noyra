@@ -3,9 +3,9 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
 	"log/slog"
 	"math/rand"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -46,7 +46,7 @@ func BuildSupervisor(agentService *agent) *Supervisor {
 }
 
 // LoadConfig charge et valide les fichiers CUE, puis les convertit en structure Go
-func (s *Supervisor) loadConfig(configDir string) (*Config, error) {
+func (s *Supervisor) loadConfig(ctx context.Context, configDir string) (*Config, error) {
 	// Créer un contexte CUE
 	cuectx := cuecontext.New()
 
@@ -95,35 +95,37 @@ func (s *Supervisor) loadConfig(configDir string) (*Config, error) {
 	return &config, nil
 }
 
-func (s *Supervisor) Run() {
-	config, err := s.loadConfig(".")
+func (s *Supervisor) Run(ctx context.Context) {
+	config, err := s.loadConfig(ctx, ".")
 
 	if err != nil {
-		log.Fatalf("erreur dans la configuration: %v", err)
+		slog.LogAttrs(ctx, slog.LevelError, "Error in configuration", slog.Any("error", err))
+		os.Exit(1)
 	}
 
-	fmt.Println("supervisor")
+	slog.LogAttrs(ctx, slog.LevelInfo, "Supervisor starting")
 	// Set up a connection to the server.
 
-	stream, err := s.agentService.Direct.ContainerListener(context.Background(), &protoContainer.ContainerListenerRequest{})
+	stream, err := s.agentService.Direct.ContainerListener(ctx, &protoContainer.ContainerListenerRequest{})
 
 	if err != nil {
-		log.Fatalf("Error while calling ContainerListener: %v", err)
+		slog.LogAttrs(ctx, slog.LevelError, "Error while calling ContainerListener", slog.Any("error", err))
+		os.Exit(1)
 	}
 
 	for _, service := range config.Service {
-		s.deployService(service)
+		s.deployService(ctx, service)
 	}
 
 	for {
 		feature, _ := stream.Recv()
-		log.Println("bouh supervisoooooooooooooooor", feature)
+		slog.LogAttrs(ctx, slog.LevelInfo, "Container event received", slog.Any("feature", feature))
 	}
 }
 
-func (s *Supervisor) deployService(service Service) {
+func (s *Supervisor) deployService(ctx context.Context, service Service) {
 	// @TODO containersList or containerLists or other ?
-	containersList, err := s.agentService.Direct.ContainerList(context.Background(), &protoContainer.ContainerListRequest{
+	containersList, err := s.agentService.Direct.ContainerList(ctx, &protoContainer.ContainerListRequest{
 		Labels: map[string]string{
 			"noyra.name": service.Name,
 		},
@@ -136,7 +138,7 @@ func (s *Supervisor) deployService(service Service) {
 	}
 
 	if err != nil {
-		slog.LogAttrs(context.Background(), slog.LevelWarn, "Failed to get container labels", slog.Any("error", err))
+		slog.LogAttrs(ctx, slog.LevelWarn, "Failed to get container labels", slog.Any("error", err))
 	}
 
 	exposedPorts := make(map[uint32]string)
@@ -154,7 +156,7 @@ func (s *Supervisor) deployService(service Service) {
 	}
 
 	for range containerToDeploy {
-		s.agentService.Direct.ContainerStart(context.Background(), &protoContainer.ContainerStartRequest{
+		s.agentService.Direct.ContainerStart(ctx, &protoContainer.ContainerStartRequest{
 			Image:        service.Image,
 			Name:         service.Name + "-" + ContainerNameHash(),
 			ExposedPorts: exposedPorts,
