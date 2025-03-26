@@ -38,10 +38,10 @@ func main() {
 	}
 
 	agentService := BuildAgent(podmanConnection)
-	go agentService.Run()
+	go agentService.Run(ctx)
 
-	ds := BuildDiscoveryService(context.Background(), "noyra-id", agentService)
-	go ds.Run(context.Background())
+	ds := BuildDiscoveryService(ctx, "noyra-id", agentService)
+	go ds.Run(ctx)
 
 	// for {
 	// 	time.Sleep(1 * time.Second)
@@ -49,7 +49,7 @@ func main() {
 
 	supervisor := BuildSupervisor(agentService)
 
-	go supervisor.Run()
+	go supervisor.Run(ctx)
 
 	for {
 		time.Sleep(1 * time.Second)
