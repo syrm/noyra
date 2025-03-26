@@ -4,16 +4,16 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"log/slog"
 	"math/rand"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"cuelang.org/go/cue"
 	"cuelang.org/go/cue/cuecontext"
 	"cuelang.org/go/cue/load"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 
 	protoContainer "blackprism.org/noyra/grpc-proto/agent"
 )
@@ -35,8 +35,18 @@ type Deploy struct {
 	Replicas int    `json:"replicas"`
 }
 
+type Supervisor struct {
+	agentService *agent
+}
+
+func BuildSupervisor(agentService *agent) *Supervisor {
+	return &Supervisor{
+		agentService: agentService,
+	}
+}
+
 // LoadConfig charge et valide les fichiers CUE, puis les convertit en structure Go
-func LoadConfig(configDir string) (*Config, error) {
+func (s *Supervisor) loadConfig(configDir string) (*Config, error) {
 	// Créer un contexte CUE
 	cuectx := cuecontext.New()
 
@@ -85,8 +95,8 @@ func LoadConfig(configDir string) (*Config, error) {
 	return &config, nil
 }
 
-func supervisor(agentService *agent) {
-	config, err := LoadConfig(".")
+func (s *Supervisor) Run() {
+	config, err := s.loadConfig(".")
 
 	if err != nil {
 		log.Fatalf("erreur dans la configuration: %v", err)
@@ -94,117 +104,91 @@ func supervisor(agentService *agent) {
 
 	fmt.Println("supervisor")
 	// Set up a connection to the server.
-	conn, err := grpc.NewClient("localhost:4646", grpc.WithTransportCredentials(insecure.NewCredentials()))
-	if err != nil {
-		log.Fatalf("did not connect: %v", err)
-	}
-	defer conn.Close()
-	c := protoContainer.NewAgentClient(conn)
 
-	stream, err := c.ContainerListener(context.Background(), &protoContainer.ContainerListenerRequest{})
+	stream, err := s.agentService.Direct.ContainerListener(context.Background(), &protoContainer.ContainerListenerRequest{})
 
 	if err != nil {
 		log.Fatalf("Error while calling ContainerListener: %v", err)
 	}
 
 	for _, service := range config.Service {
-		exposedPorts := make(map[uint32]string)
-
-		for _, portWithProtocol := range service.Expose {
-			port := strings.Split(portWithProtocol, "/")
-
-			if len(port) == 1 {
-				port = append(port, "tcp")
-			}
-
-			portUint32, _ := strconv.Atoi(port[0])
-
-			exposedPorts[uint32(portUint32)] = "tcp"
-		}
-
-		for range service.Deploy.Replicas {
-			agentService.Direct.ContainerStart(context.Background(), &protoContainer.ContainerStartRequest{
-				Image:        service.Image,
-				Name:         service.Name + "-" + ContainerNameHash(),
-				ExposedPorts: exposedPorts,
-				Labels: map[string]string{
-					"noyra.type":    service.Deploy.Type,
-					"noyra.cluster": service.Name,
-					"noyra.domain":  service.Domains[0],
-				},
-			})
-		}
+		s.deployService(service)
 	}
 
 	for {
 		feature, _ := stream.Recv()
 		log.Println("bouh supervisoooooooooooooooor", feature)
 	}
+}
 
-	// newUUID := uuid.New()
-	// shortUUID := newUUID.String()[:8]
+func (s *Supervisor) deployService(service Service) {
+	// @TODO containersList or containerLists or other ?
+	containersList, err := s.agentService.Direct.ContainerList(context.Background(), &protoContainer.ContainerListRequest{
+		Labels: map[string]string{
+			"noyra.name": service.Name,
+		},
+	})
 
-	// startRequest := &protoContainer.ContainerStartRequest{
-	// 	Image: "192.168.1.39:50000/smallapp:0.3",
-	// 	Name:  "noyra-smallapp-" + shortUUID,
-	// 	Labels: map[string]string{
-	// 		"traefik.http.routers.smallapp.rule":                      "Host(`smallapp.local`)",
-	// 		"traefik.http.services.smallapp.loadbalancer.server.port": "80",
-	// 	},
-	// 	ExposedPorts: map[uint32]string{
-	// 		80: "tcp",
-	// 	},
-	// }
+	containerToDeploy := max(service.Deploy.Replicas-len(containersList.Containers), 0)
 
-	// // Contact the server and print out its response.
-	// ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	// defer cancel()
-	// r, err := c.ContainerStart(ctx, startRequest)
-	// if err != nil {
-	// 	log.Fatalf("could not greet: %v", err)
-	// }
-	// log.Printf("Greeting: %s", r.Status)
+	if containerToDeploy == 0 {
+		return
+	}
 
-	// listResponse, _ := c.ContainerList(ctx, &protoContainer.ContainerListRequest{})
+	if err != nil {
+		slog.LogAttrs(context.Background(), slog.LevelWarn, "Failed to get container labels", slog.Any("error", err))
+	}
 
-	// log.Println("Containers list")
-	// for _, containerInfo := range listResponse.GetContainers() {
-	// 	log.Printf("ID: %s\tNAME: %s\n", containerInfo.GetId(), containerInfo.GetName())
-	// 	//c.Stop(ctx, &protoContainer.StopRequest{ContainerId: containerInfo.GetId()})
-	// 	//c.Remove(ctx, &protoContainer.RemoveRequest{ContainerId: containerInfo.GetId()})
-	// }
+	exposedPorts := make(map[uint32]string)
+
+	for _, portWithProtocol := range service.Expose {
+		port := strings.Split(portWithProtocol, "/")
+
+		if len(port) == 1 {
+			port = append(port, "tcp")
+		}
+
+		portUint32, _ := strconv.Atoi(port[0])
+
+		exposedPorts[uint32(portUint32)] = "tcp"
+	}
+
+	for range containerToDeploy {
+		s.agentService.Direct.ContainerStart(context.Background(), &protoContainer.ContainerStartRequest{
+			Image:        service.Image,
+			Name:         service.Name + "-" + ContainerNameHash(),
+			ExposedPorts: exposedPorts,
+			Labels: map[string]string{
+				"noyra.name":    service.Name,
+				"noyra.type":    service.Deploy.Type,
+				"noyra.cluster": service.Name,
+				"noyra.domain":  service.Domains[0],
+			},
+		})
+	}
 }
 
 var rng = rand.New(rand.NewSource(time.Now().UnixNano()))
+var mutex sync.Mutex
 
 const (
 	// We omit vowels from the set of available characters to reduce the chances
 	// of "bad words" being formed.
 	alphanums = "bcdfghjklmnpqrstvwxz2456789"
-	// No. of bits required to index into alphanums string.
-	alphanumsIdxBits = 5
-	// Mask used to extract last alphanumsIdxBits of an int.
-	alphanumsIdxMask = 1<<alphanumsIdxBits - 1
-	// No. of random letters we can extract from a single int63.
-	maxAlphanumsPerInt = 63 / alphanumsIdxBits
 )
 
-// @TODO attention si appelé dans goroutine soucis de concurrence
 func ContainerNameHash() string {
 	b := make([]byte, 5)
 
+	mutex.Lock()
 	randomInt63 := rng.Int63()
-	remaining := maxAlphanumsPerInt
-	for i := 0; i < 5; {
-		if remaining == 0 {
-			randomInt63, remaining = rng.Int63(), maxAlphanumsPerInt
-		}
-		if idx := int(randomInt63 & alphanumsIdxMask); idx < len(alphanums) {
-			b[i] = alphanums[idx]
-			i++
-		}
-		randomInt63 >>= alphanumsIdxBits
-		remaining--
+	mutex.Unlock()
+
+	for i := range 5 {
+		idx := randomInt63 & 0b111111
+		b[i] = alphanums[idx%int64(len(alphanums))]
+		randomInt63 >>= 6
 	}
+
 	return string(b)
 }
