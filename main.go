@@ -5,15 +5,11 @@ package main
 import (
 	"context"
 	_ "embed"
-	"log"
 	"log/slog"
 	"os"
 	"time"
 
-	protoContainer "blackprism.org/noyra/grpc-proto/agent"
 	"github.com/containers/podman/v5/pkg/bindings"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 )
 
 //go:embed schema.cue
@@ -44,8 +40,6 @@ func main() {
 	agentService := BuildAgent(podmanConnection)
 	go agentService.Run()
 
-	initNoyra()
-
 	ds := BuildDiscoveryService(context.Background(), "noyra-id", agentService)
 	go ds.Run(context.Background())
 
@@ -53,60 +47,11 @@ func main() {
 	// 	time.Sleep(1 * time.Second)
 	// }
 
-	go supervisor(agentService)
+	supervisor := BuildSupervisor(agentService)
+
+	go supervisor.Run()
 
 	for {
 		time.Sleep(1 * time.Second)
 	}
-}
-
-func initNoyra() {
-
-	conn, err := grpc.NewClient("localhost:4646", grpc.WithTransportCredentials(insecure.NewCredentials()))
-	if err != nil {
-		log.Fatalf("did not connect: %v", err)
-	}
-	defer conn.Close()
-	c := protoContainer.NewAgentClient(conn)
-
-	configPath := "/mnt/data/src/go/noyra/config/envoy.yaml"
-
-	startRequest := &protoContainer.ContainerStartRequest{
-		Image:   "envoyproxy/envoy:v1.33.0",
-		Name:    "noyra-envoy",
-		Command: []string{"-c", "/config.yaml", "--drain-time-s", "5", "-l", "debug"},
-		ExposedPorts: map[uint32]string{
-			10000: "tcp",
-			19001: "tcp",
-		},
-		Network: "noyra",
-		Mounts: []*protoContainer.ContainerMount{
-			{
-				Destination: "/config.yaml",
-				Type:        "bind",
-				Source:      configPath,
-				Options:     []string{"rbind", "ro"},
-			},
-		},
-		PortMappings: []*protoContainer.ContainerPortMapping{
-			{
-				ContainerPort: 10000,
-				HostPort:      10000,
-			},
-			{
-				ContainerPort: 19001,
-				HostPort:      19001,
-			},
-		},
-	}
-
-	// Contact the server and print out its response.
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	defer cancel()
-	r, err := c.ContainerStart(ctx, startRequest)
-	if err != nil {
-		log.Fatalf("could not start: %v", err)
-	}
-	log.Printf("Greeting: %s", r.Status)
-
 }

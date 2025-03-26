@@ -50,6 +50,7 @@ message ContainerInfoRequest {
 
 message ContainerListRequest {
   repeated string containersId = 1;
+  map<string, string> labels = 2;
 }
 
 message ContainerListResponse {
