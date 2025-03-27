@@ -1,4 +1,4 @@
-package config
+package noyra
 
 // Définition d'un service individuel
 #Service: {

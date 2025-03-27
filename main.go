@@ -27,9 +27,19 @@ func main() {
 	}))
 	slog.SetDefault(logger)
 
+	if os.Getenv("PODMAN_HOST") == "" {
+		slog.LogAttrs(context.Background(), slog.LevelError, "PODMAN_HOST env var is not set")
+		os.Exit(1)
+	}
+
+	if os.Getenv("NOYRA_CONFIG") == "" {
+		slog.LogAttrs(context.Background(), slog.LevelError, "NOYRA_CONFIG env var is not set")
+		os.Exit(1)
+	}
+
 	ctx := context.Background()
 
-	podmanConnection, err := bindings.NewConnection(ctx, "unix:///run/user/1000/podman/podman.sock")
+	podmanConnection, err := bindings.NewConnection(ctx, os.Getenv("PODMAN_HOST"))
 
 	if err != nil {
 		slog.LogAttrs(ctx, slog.LevelError, "Error connecting to Podman",

@@ -57,19 +57,19 @@ func (a *agent) Run(ctx context.Context) {
 	a.initNoyra(ctx)
 
 	flag.Parse()
-	listenContainer, err := net.Listen("tcp", ":4646")
+	listenAgent, err := net.Listen("tcp", ":4646")
 
 	if err != nil {
-		slog.LogAttrs(ctx, slog.LevelError, "Failed to listen for container service",
+		slog.LogAttrs(ctx, slog.LevelError, "Failed to listen for agent service",
 			slog.Any("error", err))
 		os.Exit(1)
 	}
 
-	slog.LogAttrs(ctx, slog.LevelInfo, "Container service listening",
-		slog.Any("address", listenContainer.Addr()))
+	slog.LogAttrs(ctx, slog.LevelInfo, "Agent service listening",
+		slog.Any("address", listenAgent.Addr()))
 
-	if err := a.GrpcServer.Serve(listenContainer); err != nil {
-		slog.LogAttrs(ctx, slog.LevelError, "Container service failed",
+	if err := a.GrpcServer.Serve(listenAgent); err != nil {
+		slog.LogAttrs(ctx, slog.LevelError, "Agent service failed",
 			slog.Any("error", err))
 		os.Exit(1)
 	}

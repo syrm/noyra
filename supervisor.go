@@ -45,24 +45,19 @@ func BuildSupervisor(agentService *agent) *Supervisor {
 	}
 }
 
-// LoadConfig charge et valide les fichiers CUE, puis les convertit en structure Go
-func (s *Supervisor) loadConfig(ctx context.Context, configDir string) (*Config, error) {
-	// Créer un contexte CUE
+func (s *Supervisor) loadConfig(configDir string) (*Config, error) {
 	cuectx := cuecontext.New()
 
-	// Compiler le schéma embarqué
 	schemaVal := cuectx.CompileString(embeddedSchema)
 	if schemaVal.Err() != nil {
 		return nil, fmt.Errorf("erreur dans le schéma intégré: %v", schemaVal.Err())
 	}
 
-	// Charger les fichiers CUE
 	bis := load.Instances([]string{configDir}, nil)
 	if len(bis) == 0 {
 		return nil, fmt.Errorf("aucun fichier CUE trouvé dans %s", configDir)
 	}
 
-	// Construire la valeur CUE
 	var value cue.Value
 	for _, bi := range bis {
 		if bi.Err != nil {
@@ -75,18 +70,15 @@ func (s *Supervisor) loadConfig(ctx context.Context, configDir string) (*Config,
 		}
 	}
 
-	// Vérifier les erreurs
 	if value.Err() != nil {
 		return nil, fmt.Errorf("erreur dans la configuration CUE: %v", value.Err())
 	}
 
-	// Unifier le schéma et la configuration
 	value = schemaVal.Unify(value)
 	if value.Err() != nil {
 		return nil, fmt.Errorf("la configuration n'est pas valide selon le schéma: %v", value.Err())
 	}
 
-	// Convertir en structure Go
 	var config Config
 	if err := value.Decode(&config); err != nil {
 		return nil, fmt.Errorf("erreur lors de la conversion en Go: %v", err)
@@ -96,7 +88,7 @@ func (s *Supervisor) loadConfig(ctx context.Context, configDir string) (*Config,
 }
 
 func (s *Supervisor) Run(ctx context.Context) {
-	config, err := s.loadConfig(ctx, ".")
+	config, err := s.loadConfig(os.Getenv("NOYRA_CONFIG"))
 
 	if err != nil {
 		slog.LogAttrs(ctx, slog.LevelError, "Error in configuration", slog.Any("error", err))
@@ -104,7 +96,6 @@ func (s *Supervisor) Run(ctx context.Context) {
 	}
 
 	slog.LogAttrs(ctx, slog.LevelInfo, "Supervisor starting")
-	// Set up a connection to the server.
 
 	stream, err := s.agentService.Direct.ContainerListener(ctx, &protoContainer.ContainerListenerRequest{})
 
