@@ -17,10 +17,12 @@ message ContainerStartRequest {
   string name = 2;
   repeated string command = 3;
   map<string, string> labels = 4;
-  map<uint32, string> exposed_ports = 5;
-  string network = 6;
-  repeated ContainerMount mounts = 7;
-  repeated ContainerPortMapping port_mappings = 8;
+  map<string, string> env = 5;
+  map<uint32, string> exposed_ports = 6;
+  string network = 7;
+  repeated ContainerMount mounts = 8;
+  repeated ContainerVolume volumes = 9;
+  repeated ContainerPortMapping port_mappings = 10;
 }
 
 message ContainerMount {
@@ -28,6 +30,12 @@ message ContainerMount {
 	string type = 2;
 	string source = 3;
 	repeated string options = 4;
+}
+
+message ContainerVolume {
+  string destination = 1;
+  string source = 2;
+  repeated string options = 3;
 }
 
 message ContainerPortMapping {
@@ -63,6 +71,7 @@ message ContainerInfo {
   map<string, string> labels = 3;
   string IPAddress = 4;
   int32 exposedPort = 5;
+  string state = 6;
 }
 
 message ContainerListenerRequest {}

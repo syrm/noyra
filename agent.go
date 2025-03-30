@@ -4,7 +4,6 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"log"
 	"log/slog"
 	"net"
 	"os"
@@ -54,25 +53,23 @@ func BuildAgent(podmanContext context.Context) *agent {
 	return a
 }
 
-func (a *agent) Run() {
-	ctx := context.Background()
-
-	a.initNoyra()
+func (a *agent) Run(ctx context.Context) {
+	a.initNoyra(ctx)
 
 	flag.Parse()
-	listenContainer, err := net.Listen("tcp", ":4646")
+	listenAgent, err := net.Listen("tcp", ":4646")
 
 	if err != nil {
-		slog.LogAttrs(ctx, slog.LevelError, "Failed to listen for container service",
+		slog.LogAttrs(ctx, slog.LevelError, "Failed to listen for agent service",
 			slog.Any("error", err))
 		os.Exit(1)
 	}
 
-	slog.LogAttrs(ctx, slog.LevelInfo, "Container service listening",
-		slog.Any("address", listenContainer.Addr()))
+	slog.LogAttrs(ctx, slog.LevelInfo, "Agent service listening",
+		slog.Any("address", listenAgent.Addr()))
 
-	if err := a.GrpcServer.Serve(listenContainer); err != nil {
-		slog.LogAttrs(ctx, slog.LevelError, "Container service failed",
+	if err := a.GrpcServer.Serve(listenAgent); err != nil {
+		slog.LogAttrs(ctx, slog.LevelError, "Agent service failed",
 			slog.Any("error", err))
 		os.Exit(1)
 	}
@@ -92,13 +89,22 @@ func (a *agent) ContainerStart(ctx context.Context, startRequest *protoAgent.Con
 	}
 
 	mounts := make([]spec.Mount, 0, len(startRequest.GetMounts()))
-	fmt.Printf("mounts init %+v\n", mounts)
+	slog.LogAttrs(ctx, slog.LevelDebug, "Initializing mounts", slog.Any("mounts", mounts))
 	for _, m := range startRequest.GetMounts() {
 		mounts = append(mounts, spec.Mount{
 			Destination: m.GetDestination(),
 			Source:      m.GetSource(),
 			Type:        m.GetType(),
 			Options:     m.GetOptions(),
+		})
+	}
+
+	volumes := make([]*specgen.NamedVolume, 0, len(startRequest.GetVolumes()))
+	for _, v := range startRequest.GetVolumes() {
+		volumes = append(volumes, &specgen.NamedVolume{
+			Name:    v.GetSource(),
+			Dest:    v.GetDestination(),
+			Options: v.GetOptions(),
 		})
 	}
 
@@ -119,10 +125,11 @@ func (a *agent) ContainerStart(ctx context.Context, startRequest *protoAgent.Con
 			Name:    startRequest.GetName(),
 			Labels:  startRequest.GetLabels(),
 			Command: startRequest.GetCommand(),
+			Env:     startRequest.GetEnv(),
 		},
 		ContainerStorageConfig: specgen.ContainerStorageConfig{
 			Image:   startRequest.GetImage(),
-			Volumes: []*specgen.NamedVolume{},
+			Volumes: volumes,
 			Mounts:  mounts,
 		},
 		ContainerNetworkConfig: specgen.ContainerNetworkConfig{
@@ -308,6 +315,7 @@ func (a *agent) ContainerList(ctx context.Context, listRequest *protoAgent.Conta
 			Labels:      c.Labels,
 			ExposedPort: exposedPort,
 			IPAddress:   ipAddress,
+			State:       c.State,
 		}
 	}
 
@@ -327,7 +335,7 @@ func (a *agent) ContainerListener(in *protoAgent.ContainerListenerRequest, strea
 	go func() {
 		err := system.Events(a.podmanContext, eventChannel, nil, options)
 		if err != nil {
-			fmt.Printf("Error setting up events listener: %v\n", err)
+			slog.LogAttrs(stream.Context(), slog.LevelError, "Error setting up events listener", slog.Any("error", err))
 		}
 	}()
 
@@ -341,19 +349,22 @@ func (a *agent) ContainerListener(in *protoAgent.ContainerListenerRequest, strea
 				}
 
 				if err := stream.Send(containerEvent); err != nil {
-					fmt.Printf("Error sending event: %v\n", err)
+					slog.LogAttrs(stream.Context(), slog.LevelError, "Error sending container event",
+						slog.Any("error", err),
+						slog.String("containerId", event.Actor.ID),
+						slog.String("action", event.Status))
 					return err
 				}
 
 				switch event.Status {
 				case "create":
-					fmt.Printf("Container created: %s\n", event.Actor.ID)
+					slog.LogAttrs(stream.Context(), slog.LevelInfo, "Container created", slog.String("containerId", event.Actor.ID))
 				case "start":
-					fmt.Printf("Container started: %s\n", event.Actor.ID)
+					slog.LogAttrs(stream.Context(), slog.LevelInfo, "Container started", slog.String("containerId", event.Actor.ID))
 				case "stop":
-					fmt.Printf("Container stopped: %s\n", event.Actor.ID)
+					slog.LogAttrs(stream.Context(), slog.LevelInfo, "Container stopped", slog.String("containerId", event.Actor.ID))
 				case "die":
-					fmt.Printf("Container died: %s\n", event.Actor.ID)
+					slog.LogAttrs(stream.Context(), slog.LevelInfo, "Container died", slog.String("containerId", event.Actor.ID))
 				}
 			}
 		case <-stream.Context().Done():
@@ -384,15 +395,15 @@ func (a *agent) pullImage(ctx context.Context, startRequest *protoAgent.Containe
 	}
 }
 
-func (a *agent) initNoyra() {
-	containersList, err := a.ContainerList(context.Background(), &protoAgent.ContainerListRequest{
+func (a *agent) initNoyra(ctx context.Context) {
+	containersList, err := a.ContainerList(ctx, &protoAgent.ContainerListRequest{
 		Labels: map[string]string{
 			"noyra.name": "noyra-envoy",
 		},
 	})
 
 	if len(containersList.GetContainers()) > 0 {
-		fmt.Println("Noyra already running")
+		slog.LogAttrs(ctx, slog.LevelInfo, "Noyra Envoy already running")
 		return
 	}
 
@@ -431,12 +442,13 @@ func (a *agent) initNoyra() {
 	}
 
 	// Contact the server and print out its response.
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	timeoutCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
-	r, err := a.Direct.ContainerStart(ctx, startRequest)
+	r, err := a.Direct.ContainerStart(timeoutCtx, startRequest)
 	if err != nil {
-		log.Fatalf("could not start: %v", err)
+		slog.LogAttrs(ctx, slog.LevelError, "Could not start container", slog.Any("error", err))
+		os.Exit(1)
 	}
-	log.Printf("Greeting: %s", r.Status)
+	slog.LogAttrs(ctx, slog.LevelInfo, "Container start response", slog.String("status", r.Status))
 
 }

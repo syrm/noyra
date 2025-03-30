@@ -10,12 +10,20 @@ import (
 	"time"
 
 	"github.com/containers/podman/v5/pkg/bindings"
+	gopsAgent "github.com/google/gops/agent"
 )
 
-//go:embed schema.cue
+//go:embed config/schema.cue
 var embeddedSchema string
 
 func main() {
+	go func() {
+		err := gopsAgent.Listen(gopsAgent.Options{Addr: "0.0.0.0:50000"})
+		if err != nil {
+			return
+		}
+	}()
+
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
 		AddSource: true,
 		ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
@@ -27,9 +35,19 @@ func main() {
 	}))
 	slog.SetDefault(logger)
 
+	if os.Getenv("PODMAN_HOST") == "" {
+		slog.LogAttrs(context.Background(), slog.LevelError, "PODMAN_HOST env var is not set")
+		os.Exit(1)
+	}
+
+	if os.Getenv("NOYRA_CONFIG") == "" {
+		slog.LogAttrs(context.Background(), slog.LevelError, "NOYRA_CONFIG env var is not set")
+		os.Exit(1)
+	}
+
 	ctx := context.Background()
 
-	podmanConnection, err := bindings.NewConnection(ctx, "unix:///run/user/1000/podman/podman.sock")
+	podmanConnection, err := bindings.NewConnection(ctx, os.Getenv("PODMAN_HOST"))
 
 	if err != nil {
 		slog.LogAttrs(ctx, slog.LevelError, "Error connecting to Podman",
@@ -38,18 +56,19 @@ func main() {
 	}
 
 	agentService := BuildAgent(podmanConnection)
-	go agentService.Run()
+	go agentService.Run(ctx)
 
-	ds := BuildDiscoveryService(context.Background(), "noyra-id", agentService)
-	go ds.Run(context.Background())
+	ds := BuildDiscoveryService(ctx, "noyra-id", agentService)
+	go ds.Run(ctx)
 
 	// for {
 	// 	time.Sleep(1 * time.Second)
 	// }
 
-	supervisor := BuildSupervisor(agentService)
+	etcdClient, _ := BuildEtcdClient(ctx)
+	supervisor := BuildSupervisor(agentService, etcdClient)
 
-	go supervisor.Run()
+	go supervisor.Run(ctx)
 
 	for {
 		time.Sleep(1 * time.Second)

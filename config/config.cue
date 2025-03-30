@@ -1,14 +1,11 @@
-package config
+package noyra
 
-service: {
+deployment: {
 	"smallapp": {
 		domains: ["smallapp.local"]
 		image: "nginx:latest"
 		expose: ["80/tcp"]
-
-		deploy: {
-			type:     "http"
-			replicas: 3
-		}
+	  type: "http"
+	  replicas: 3
 	}
 }
