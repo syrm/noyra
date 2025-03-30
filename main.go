@@ -10,12 +10,20 @@ import (
 	"time"
 
 	"github.com/containers/podman/v5/pkg/bindings"
+	gopsAgent "github.com/google/gops/agent"
 )
 
-//go:embed schema.cue
+//go:embed config/schema.cue
 var embeddedSchema string
 
 func main() {
+	go func() {
+		err := gopsAgent.Listen(gopsAgent.Options{Addr: "0.0.0.0:50000"})
+		if err != nil {
+			return
+		}
+	}()
+
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
 		AddSource: true,
 		ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
@@ -57,7 +65,8 @@ func main() {
 	// 	time.Sleep(1 * time.Second)
 	// }
 
-	supervisor := BuildSupervisor(agentService)
+	etcdClient, _ := BuildEtcdClient(ctx)
+	supervisor := BuildSupervisor(agentService, etcdClient)
 
 	go supervisor.Run(ctx)
 

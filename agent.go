@@ -99,6 +99,15 @@ func (a *agent) ContainerStart(ctx context.Context, startRequest *protoAgent.Con
 		})
 	}
 
+	volumes := make([]*specgen.NamedVolume, 0, len(startRequest.GetVolumes()))
+	for _, v := range startRequest.GetVolumes() {
+		volumes = append(volumes, &specgen.NamedVolume{
+			Name:    v.GetSource(),
+			Dest:    v.GetDestination(),
+			Options: v.GetOptions(),
+		})
+	}
+
 	portMappings := make([]nettypes.PortMapping, 0, len(startRequest.GetPortMappings()))
 	for _, p := range startRequest.GetPortMappings() {
 		portMappings = append(portMappings, nettypes.PortMapping{
@@ -116,10 +125,11 @@ func (a *agent) ContainerStart(ctx context.Context, startRequest *protoAgent.Con
 			Name:    startRequest.GetName(),
 			Labels:  startRequest.GetLabels(),
 			Command: startRequest.GetCommand(),
+			Env:     startRequest.GetEnv(),
 		},
 		ContainerStorageConfig: specgen.ContainerStorageConfig{
 			Image:   startRequest.GetImage(),
-			Volumes: []*specgen.NamedVolume{},
+			Volumes: volumes,
 			Mounts:  mounts,
 		},
 		ContainerNetworkConfig: specgen.ContainerNetworkConfig{
@@ -305,6 +315,7 @@ func (a *agent) ContainerList(ctx context.Context, listRequest *protoAgent.Conta
 			Labels:      c.Labels,
 			ExposedPort: exposedPort,
 			IPAddress:   ipAddress,
+			State:       c.State,
 		}
 	}
 
@@ -392,7 +403,7 @@ func (a *agent) initNoyra(ctx context.Context) {
 	})
 
 	if len(containersList.GetContainers()) > 0 {
-		slog.LogAttrs(ctx, slog.LevelInfo, "Noyra already running")
+		slog.LogAttrs(ctx, slog.LevelInfo, "Noyra Envoy already running")
 		return
 	}
 
