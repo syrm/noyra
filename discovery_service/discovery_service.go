@@ -1,4 +1,4 @@
-package main
+package discovery_service
 
 import (
 	"context"
@@ -7,6 +7,7 @@ import (
 	"os"
 	"time"
 
+	"blackprism.org/noyra/agent"
 	protoAgent "blackprism.org/noyra/grpc-proto/agent"
 
 	cluster "github.com/envoyproxy/go-control-plane/envoy/config/cluster/v3"
@@ -31,15 +32,22 @@ import (
 	"google.golang.org/protobuf/types/known/durationpb"
 )
 
-type discoveryService struct {
+const (
+	grpcKeepaliveTime        = 30 * time.Second
+	grpcKeepaliveTimeout     = 5 * time.Second
+	grpcKeepaliveMinTime     = 30 * time.Second
+	grpcMaxConcurrentStreams = 1000000
+)
+
+type DiscoveryService struct {
 	clusterCache cache.SnapshotCache
 	nodeID       string
-	agent        *agent
+	agent        *agent.Agent
 	resources    map[string]map[resource.Type][]types.Resource
 }
 
-func BuildDiscoveryService(ctx context.Context, nodeID string, agent *agent) *discoveryService {
-	ds := &discoveryService{
+func BuildDiscoveryService(ctx context.Context, nodeID string, agent *agent.Agent) *DiscoveryService {
+	ds := &DiscoveryService{
 		clusterCache: cache.NewSnapshotCache(false, cache.IDHash{}, nil),
 		nodeID:       nodeID,
 		agent:        agent,
@@ -52,7 +60,7 @@ func BuildDiscoveryService(ctx context.Context, nodeID string, agent *agent) *di
 	return ds
 }
 
-func (ds *discoveryService) Run(ctx context.Context) {
+func (ds *DiscoveryService) Run(ctx context.Context) {
 	grpcServer := grpc.NewServer(grpc.MaxConcurrentStreams(grpcMaxConcurrentStreams))
 	lis, err := net.Listen("tcp", ":18000")
 	if err != nil {
@@ -80,7 +88,7 @@ func (ds *discoveryService) Run(ctx context.Context) {
 	}
 }
 
-func (ds *discoveryService) SetSnapshot(ctx context.Context, resources map[resource.Type][]types.Resource) bool {
+func (ds *DiscoveryService) SetSnapshot(ctx context.Context, resources map[resource.Type][]types.Resource) bool {
 	snapshot, err := cache.NewSnapshot(ds.newVersion(), resources)
 
 	if err != nil {
@@ -98,7 +106,7 @@ func (ds *discoveryService) SetSnapshot(ctx context.Context, resources map[resou
 	return true
 }
 
-func (ds *discoveryService) init(ctx context.Context) {
+func (ds *DiscoveryService) init(ctx context.Context) {
 	containers, err := ds.agent.ContainerList(ctx, &protoAgent.ContainerListRequest{})
 
 	if err != nil {
@@ -106,8 +114,8 @@ func (ds *discoveryService) init(ctx context.Context) {
 		return
 	}
 
-	for _, container := range containers.Containers {
-		if container.Labels["noyra.type"] == "http" {
+	for _, container := range containers.GetContainers() {
+		if container.GetLabels()["noyra.type"] == "http" {
 			ds.addCluster(container)
 		}
 	}
@@ -116,7 +124,7 @@ func (ds *discoveryService) init(ctx context.Context) {
 	ds.SetSnapshot(ctx, ds.getResourcesForSnapshot())
 }
 
-func (ds *discoveryService) getResourcesForSnapshot() map[resource.Type][]types.Resource {
+func (ds *DiscoveryService) getResourcesForSnapshot() map[resource.Type][]types.Resource {
 	resources := make(map[resource.Type][]types.Resource)
 
 	for _, resource := range ds.resources {
@@ -128,34 +136,34 @@ func (ds *discoveryService) getResourcesForSnapshot() map[resource.Type][]types.
 	return resources
 }
 
-func (ds *discoveryService) addCluster(container *protoAgent.ContainerInfo) {
-	clusterName, ok := container.Labels["noyra.cluster"]
+func (ds *DiscoveryService) addCluster(container *protoAgent.ContainerInfo) {
+	clusterName, ok := container.GetLabels()["noyra.cluster"]
 
 	if !ok {
-		clusterName = container.Name
+		clusterName = container.GetName()
 	}
 
 	if ds.resources[clusterName] != nil {
-		ds.resources[clusterName][resource.ClusterType][0].(*cluster.Cluster).LoadAssignment.Endpoints[0].LbEndpoints = append(ds.resources[clusterName][resource.ClusterType][0].(*cluster.Cluster).LoadAssignment.Endpoints[0].LbEndpoints, ds.addEndpoint(container.IPAddress, container.ExposedPort))
+		ds.resources[clusterName][resource.ClusterType][0].(*cluster.Cluster).LoadAssignment.Endpoints[0].LbEndpoints = append(ds.resources[clusterName][resource.ClusterType][0].(*cluster.Cluster).LoadAssignment.Endpoints[0].LbEndpoints, ds.addEndpoint(container.GetIPAddress(), container.GetExposedPort()))
 		return
 	}
 
-	clusterDomain, ok := container.Labels["noyra.domain"]
+	clusterDomain, ok := container.GetLabels()["noyra.domain"]
 
 	if !ok {
-		clusterDomain = container.Name
+		clusterDomain = container.GetName()
 	}
 
 	resources := make(map[resource.Type][]types.Resource)
-	loadAssignment := ds.makeEndpointConfig(clusterName, []*endpoint.LbEndpoint{ds.addEndpoint(container.IPAddress, container.ExposedPort)})
-	resources[resource.ListenerType] = append(resources[resource.ListenerType], ds.makeListenerConfig(container.Name))
-	resources[resource.RouteType] = append(resources[resource.RouteType], ds.makeRouteConfig(clusterName, clusterDomain, container.Name))
+	loadAssignment := ds.makeEndpointConfig(clusterName, []*endpoint.LbEndpoint{ds.addEndpoint(container.GetIPAddress(), container.GetExposedPort())})
+	resources[resource.ListenerType] = append(resources[resource.ListenerType], ds.makeListenerConfig(container.GetName()))
+	resources[resource.RouteType] = append(resources[resource.RouteType], ds.makeRouteConfig(clusterName, clusterDomain, container.GetName()))
 	resources[resource.ClusterType] = append(resources[resource.ClusterType], ds.makeClusterConfig(clusterName, loadAssignment))
 
 	ds.resources[clusterName] = resources
 }
 
-func (ds *discoveryService) makeConfigSource() *core.ConfigSource {
+func (ds *DiscoveryService) makeConfigSource() *core.ConfigSource {
 	source := &core.ConfigSource{}
 	source.ResourceApiVersion = resource.DefaultAPIVersion
 	source.ConfigSourceSpecifier = &core.ConfigSource_ApiConfigSource{
@@ -173,7 +181,7 @@ func (ds *discoveryService) makeConfigSource() *core.ConfigSource {
 	return source
 }
 
-func (ds *discoveryService) makeListenerConfig(name string) *listener.Listener {
+func (ds *DiscoveryService) makeListenerConfig(name string) *listener.Listener {
 	routerConfig, _ := anypb.New(&router.Router{})
 
 	manager := &hcm.HttpConnectionManager{
@@ -222,7 +230,7 @@ func (ds *discoveryService) makeListenerConfig(name string) *listener.Listener {
 	}
 }
 
-func (ds *discoveryService) makeRouteConfig(clusterName string, clusterDomain string, name string) *route.RouteConfiguration {
+func (ds *DiscoveryService) makeRouteConfig(clusterName string, clusterDomain string, name string) *route.RouteConfiguration {
 	return &route.RouteConfiguration{
 		Name: name,
 		VirtualHosts: []*route.VirtualHost{{
@@ -249,7 +257,7 @@ func (ds *discoveryService) makeRouteConfig(clusterName string, clusterDomain st
 	}
 }
 
-func (ds *discoveryService) makeClusterConfig(name string, loadAssignment *endpoint.ClusterLoadAssignment) *cluster.Cluster {
+func (ds *DiscoveryService) makeClusterConfig(name string, loadAssignment *endpoint.ClusterLoadAssignment) *cluster.Cluster {
 	return &cluster.Cluster{
 		Name:                 name,
 		ConnectTimeout:       durationpb.New(250 * time.Millisecond), // @TODO voir pour un timeout configurable
@@ -260,7 +268,7 @@ func (ds *discoveryService) makeClusterConfig(name string, loadAssignment *endpo
 	}
 }
 
-func (ds *discoveryService) makeEndpointConfig(clusterName string, endpoints []*endpoint.LbEndpoint) *endpoint.ClusterLoadAssignment {
+func (ds *DiscoveryService) makeEndpointConfig(clusterName string, endpoints []*endpoint.LbEndpoint) *endpoint.ClusterLoadAssignment {
 	return &endpoint.ClusterLoadAssignment{
 		ClusterName: clusterName,
 		Endpoints: []*endpoint.LocalityLbEndpoints{
@@ -271,7 +279,7 @@ func (ds *discoveryService) makeEndpointConfig(clusterName string, endpoints []*
 	}
 }
 
-func (ds *discoveryService) addEndpoint(ipAddress string, port int32) *endpoint.LbEndpoint {
+func (ds *DiscoveryService) addEndpoint(ipAddress string, port int32) *endpoint.LbEndpoint {
 	return &endpoint.LbEndpoint{
 		HostIdentifier: &endpoint.LbEndpoint_Endpoint{
 			Endpoint: &endpoint.Endpoint{
@@ -290,7 +298,7 @@ func (ds *discoveryService) addEndpoint(ipAddress string, port int32) *endpoint.
 	}
 }
 
-func (ds *discoveryService) eventListener(ctx context.Context) {
+func (ds *DiscoveryService) eventListener(ctx context.Context) {
 	stream, err := ds.agent.Direct.ContainerListener(ctx, &protoAgent.ContainerListenerRequest{})
 
 	if err != nil {
@@ -306,15 +314,17 @@ func (ds *discoveryService) eventListener(ctx context.Context) {
 			continue
 		}
 
-		if event.Action == "start" || event.Action == "create" {
-			containersList, err := ds.agent.Direct.ContainerList(ctx, &protoAgent.ContainerListRequest{ContainersId: []string{event.Id}})
+		if event.GetAction() == "start" || event.GetAction() == "create" {
+			containerListRequest := &protoAgent.ContainerListRequest{}
+			containerListRequest.SetContainersId([]string{event.GetId()})
+			containersList, err := ds.agent.Direct.ContainerList(ctx, containerListRequest)
 
 			if err != nil {
 				slog.LogAttrs(ctx, slog.LevelWarn, "Failed to get container labels", slog.Any("error", err))
 				continue
 			}
 
-			container, ok := containersList.GetContainers()[event.Id]
+			container, ok := containersList.GetContainers()[event.GetId()]
 			if !ok {
 				continue
 			}
@@ -324,14 +334,14 @@ func (ds *discoveryService) eventListener(ctx context.Context) {
 			continue
 		}
 
-		if event.Action == "die" || event.Action == "stop" {
+		if event.GetAction() == "die" || event.GetAction() == "stop" {
 			// @TODO a faire
 			continue
 		}
 	}
 }
 
-func (ds *discoveryService) newVersion() string {
+func (ds *DiscoveryService) newVersion() string {
 	uuidv7, err := uuid.NewV7()
 
 	if err != nil {

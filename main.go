@@ -11,6 +11,12 @@ import (
 
 	"github.com/containers/podman/v5/pkg/bindings"
 	gopsAgent "github.com/google/gops/agent"
+
+	"blackprism.org/noyra/agent"
+	"blackprism.org/noyra/api_server"
+	"blackprism.org/noyra/discovery_service"
+	"blackprism.org/noyra/etcd"
+	"blackprism.org/noyra/supervisor"
 )
 
 //go:embed config/schema.cue
@@ -48,27 +54,33 @@ func main() {
 	ctx := context.Background()
 
 	podmanConnection, err := bindings.NewConnection(ctx, os.Getenv("PODMAN_HOST"))
-
 	if err != nil {
 		slog.LogAttrs(ctx, slog.LevelError, "Error connecting to Podman",
 			slog.Any("error", err))
 		os.Exit(1)
 	}
 
-	agentService := BuildAgent(podmanConnection)
-	go agentService.Run(ctx)
+	agentService := agent.BuildAgent(podmanConnection)
+	go func() {
+		exitCode := agentService.Run(ctx)
+		os.Exit(exitCode)
+	}()
 
-	ds := BuildDiscoveryService(ctx, "noyra-id", agentService)
+	ds := discovery_service.BuildDiscoveryService(ctx, "noyra-id", agentService)
 	go ds.Run(ctx)
 
 	// for {
 	// 	time.Sleep(1 * time.Second)
 	// }
 
-	etcdClient, _ := BuildEtcdClient(ctx)
-	supervisor := BuildSupervisor(agentService, etcdClient)
+	etcdClient, _ := etcd.BuildEtcdClient(ctx)
+	supervisorServer := supervisor.BuildSupervisor(agentService, etcdClient, embeddedSchema)
 
-	go supervisor.Run(ctx)
+	go supervisorServer.Run(ctx)
+
+	// Initialize and start the API server
+	apiServer := api_server.BuildAPIServer(etcdClient)
+	go apiServer.Run(ctx)
 
 	for {
 		time.Sleep(1 * time.Second)

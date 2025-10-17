@@ -1,4 +1,4 @@
-package main
+package supervisor
 
 import (
 	"bytes"
@@ -11,6 +11,7 @@ import (
 	"encoding/binary"
 	"encoding/pem"
 	"fmt"
+	"log"
 	"log/slog"
 	"math/big"
 	"math/rand"
@@ -25,8 +26,9 @@ import (
 	"cuelang.org/go/cue/cuecontext"
 	"cuelang.org/go/cue/load"
 
+	"blackprism.org/noyra/agent"
+	"blackprism.org/noyra/etcd"
 	protoAgent "blackprism.org/noyra/grpc-proto/agent"
-	protoContainer "blackprism.org/noyra/grpc-proto/agent"
 )
 
 type Config struct {
@@ -35,45 +37,46 @@ type Config struct {
 
 type DeploymentConfig struct {
 	Name     string   `json:"name"`
-	Domains  []string `json:"domains"`
 	Image    string   `json:"image"`
-	Expose   []string `json:"expose"`
 	Type     string   `json:"type"`
+	Domains  []string `json:"domains"`
+	Expose   []string `json:"expose"`
 	Replicas int      `json:"replicas"`
 }
 
 type Deployment struct {
 	Name    string           `json:"name"`
-	Domains []string         `json:"domains"`
 	Image   string           `json:"image"`
-	Expose  []string         `json:"expose"`
 	Type    string           `json:"type"`
+	Domains []string         `json:"domains"`
+	Expose  []string         `json:"expose"`
 	Status  DeploymentStatus `json:"status"`
 }
 
 type DeploymentStatus struct {
-	DesiredReplicas uint16 `json:"desiredReplicas"`
-	ReadyReplicas   uint16 `json:"readyReplicas"`
+	DesiredReplicas uint16 `json:"desired_replicas"`
+	ReadyReplicas   uint16 `json:"ready_replicas"`
 }
 
-func (d *Deployment) WriteTo(ctx context.Context, etcdClient *etcdClient, key string) error {
+func (d *Deployment) WriteTo(ctx context.Context, etcdClient *etcd.Client, key string) error {
 	buf := new(bytes.Buffer)
-	binary.Write(buf, binary.BigEndian, uint16(len(d.Name)))
-	binary.Write(buf, binary.BigEndian, []byte(d.Name))
-	binary.Write(buf, binary.BigEndian, uint16(len(d.Domains)))
+	name := d.Name // gosec G115 dont understand math.MaxUint16
+	_ = binary.Write(buf, binary.BigEndian, uint16(len(name)))
+	_ = binary.Write(buf, binary.BigEndian, []byte(name))
+	_ = binary.Write(buf, binary.BigEndian, uint16(len(d.Domains)))
 
 	for _, domain := range d.Domains {
-		binary.Write(buf, binary.BigEndian, uint16(len(domain)))
-		binary.Write(buf, binary.BigEndian, []byte(domain))
+		_ = binary.Write(buf, binary.BigEndian, uint16(len(domain)))
+		_ = binary.Write(buf, binary.BigEndian, []byte(domain))
 	}
 
-	binary.Write(buf, binary.BigEndian, d.Status.DesiredReplicas)
-	binary.Write(buf, binary.BigEndian, d.Status.ReadyReplicas)
+	_ = binary.Write(buf, binary.BigEndian, d.Status.DesiredReplicas)
+	_ = binary.Write(buf, binary.BigEndian, d.Status.ReadyReplicas)
 
 	return etcdClient.Put(ctx, key, base64.StdEncoding.EncodeToString(buf.Bytes()))
 }
 
-func (d *Deployment) ReadInto(ctx context.Context, etcdClient *etcdClient, key string) error {
+func (d *Deployment) ReadInto(ctx context.Context, etcdClient *etcd.Client, key string) error {
 	valueBase64, err := etcdClient.Get(ctx, key)
 	if err != nil {
 		slog.LogAttrs(ctx, slog.LevelError, "Error while getting value from etcd", slog.Any("error", err))
@@ -119,23 +122,69 @@ func (d *Deployment) ReadInto(ctx context.Context, etcdClient *etcdClient, key s
 	return nil
 }
 
-type supervisor struct {
-	agentService *agent
-	etcdClient   *etcdClient
-	config       *Config
+// ReadFromValue reads a deployment from a base64-encoded value
+func (d *Deployment) ReadFromValue(ctx context.Context, valueBase64 string) error {
+	value, err := base64.StdEncoding.DecodeString(valueBase64)
+	if err != nil {
+		slog.LogAttrs(ctx, slog.LevelError, "Error while decoding base64 value", slog.Any("error", err))
+		return err
+	}
+
+	// Use the existing ReadInto method's logic to parse the binary data
+	buf := bytes.NewReader(value)
+
+	var lenName uint16
+	binary.Read(buf, binary.BigEndian, &lenName)
+	name := make([]byte, lenName)
+	binary.Read(buf, binary.BigEndian, &name)
+	d.Name = string(name)
+
+	var lenDomains uint16
+	binary.Read(buf, binary.BigEndian, &lenDomains)
+
+	var domains []string
+	for range lenDomains {
+		var lenDomain uint16
+		binary.Read(buf, binary.BigEndian, &lenDomain)
+		domain := make([]byte, lenDomain)
+		binary.Read(buf, binary.BigEndian, &domain)
+		domains = append(domains, string(domain))
+	}
+
+	d.Domains = domains
+
+	var desiredReplicas uint16
+	binary.Read(buf, binary.BigEndian, &desiredReplicas)
+	var readyReplicas uint16
+	binary.Read(buf, binary.BigEndian, &readyReplicas)
+
+	d.Status = DeploymentStatus{
+		DesiredReplicas: desiredReplicas,
+		ReadyReplicas:   readyReplicas,
+	}
+
+	return nil
 }
 
-func BuildSupervisor(agentService *agent, etcdClient *etcdClient) *supervisor {
-	return &supervisor{
+type Supervisor struct {
+	agentService *agent.Agent
+	etcdClient   *etcd.Client
+	config       *Config
+	schema       string
+}
+
+func BuildSupervisor(agentService *agent.Agent, etcdClient *etcd.Client, schema string) *Supervisor {
+	return &Supervisor{
 		agentService: agentService,
 		etcdClient:   etcdClient,
+		schema:       schema,
 	}
 }
 
-func (s *supervisor) loadConfig(configDir string) error {
+func (s *Supervisor) loadConfig(configDir string) error {
 	cuectx := cuecontext.New()
 
-	schemaVal := cuectx.CompileString(embeddedSchema)
+	schemaVal := cuectx.CompileString(s.schema)
 	if schemaVal.Err() != nil {
 		return fmt.Errorf("erreur dans le schéma intégré: %v", schemaVal.Err())
 	}
@@ -176,7 +225,7 @@ func (s *supervisor) loadConfig(configDir string) error {
 	return nil
 }
 
-func (s *supervisor) Run(ctx context.Context) {
+func (s *Supervisor) Run(ctx context.Context) {
 	err := s.loadConfig(os.Getenv("NOYRA_CONFIG"))
 
 	if err != nil {
@@ -189,16 +238,18 @@ func (s *supervisor) Run(ctx context.Context) {
 	s.initEtcd(ctx)
 	// @TODO attention etcd n'a pas encore été démarré
 	s.saveClusterState(ctx)
+	slog.LogAttrs(ctx, slog.LevelInfo, "Deploying toc toc", slog.Int("services", len(s.config.Deployment)))
 
 	for _, service := range s.config.Deployment {
+		slog.LogAttrs(ctx, slog.LevelInfo, "Deploying service", slog.String("service", service.Name))
 		s.deployService(ctx, service)
 	}
 
 	s.observeCluster(ctx)
 }
 
-func (s *supervisor) saveClusterState(ctx context.Context) {
-	containerLists, err := s.agentService.Direct.ContainerList(ctx, &protoContainer.ContainerListRequest{})
+func (s *Supervisor) saveClusterState(ctx context.Context) {
+	containerLists, err := s.agentService.Direct.ContainerList(ctx, &protoAgent.ContainerListRequest{})
 
 	if err != nil {
 		slog.LogAttrs(ctx, slog.LevelError, "Error while calling ContainerList", slog.Any("error", err))
@@ -206,7 +257,7 @@ func (s *supervisor) saveClusterState(ctx context.Context) {
 
 	for _, deploymentConfig := range s.config.Deployment {
 		readyContainers := 0
-		for _, container := range containerLists.Containers {
+		for _, container := range containerLists.GetContainers() {
 			if container.GetLabels()["noyra.name"] == deploymentConfig.Name && container.GetState() == "running" {
 				readyContainers++
 			}
@@ -231,12 +282,16 @@ func (s *supervisor) saveClusterState(ctx context.Context) {
 	}
 
 	d := Deployment{}
-	d.ReadInto(ctx, s.etcdClient, "/deployment/smallapp")
+	errRead := d.ReadInto(ctx, s.etcdClient, "/deployment/smallapp")
+	if errRead != nil {
+		slog.LogAttrs(ctx, slog.LevelError, "Error while reading deployment", slog.Any("error", errRead))
+		return
+	}
 	fmt.Printf("Deployment: %+v\n", d)
 }
 
-func (s *supervisor) observeCluster(ctx context.Context) {
-	stream, err := s.agentService.Direct.ContainerListener(ctx, &protoContainer.ContainerListenerRequest{})
+func (s *Supervisor) observeCluster(ctx context.Context) {
+	stream, err := s.agentService.Direct.ContainerListener(ctx, &protoAgent.ContainerListenerRequest{})
 
 	if err != nil {
 		slog.LogAttrs(ctx, slog.LevelError, "Error while calling ContainerListener", slog.Any("error", err))
@@ -249,22 +304,27 @@ func (s *supervisor) observeCluster(ctx context.Context) {
 	}
 }
 
-func (s *supervisor) deployService(ctx context.Context, deploymentConfig DeploymentConfig) {
+func (s *Supervisor) deployService(ctx context.Context, deploymentConfig DeploymentConfig) {
 	// @TODO containersList or containerLists or other ?
-	containersList, err := s.agentService.Direct.ContainerList(ctx, &protoContainer.ContainerListRequest{
-		Labels: map[string]string{
+	containerListRequest := &protoAgent.ContainerListRequest{}
+	containerListRequest.SetLabels(
+		map[string]string{
 			"noyra.name": deploymentConfig.Name,
 		},
-	})
+	)
 
-	containerToDeploy := max(deploymentConfig.Replicas-len(containersList.Containers), 0)
+	containersList, err := s.agentService.Direct.ContainerList(ctx, containerListRequest)
 
-	if containerToDeploy == 0 {
+	if err != nil {
+		slog.LogAttrs(ctx, slog.LevelError, "Failed to get containers", slog.Any("error", err))
 		return
 	}
 
-	if err != nil {
-		slog.LogAttrs(ctx, slog.LevelWarn, "Failed to get container labels", slog.Any("error", err))
+	containerToDeploy := max(deploymentConfig.Replicas-len(containersList.GetContainers()), 0)
+
+	if containerToDeploy == 0 {
+		slog.LogAttrs(ctx, slog.LevelInfo, "No new container to deploy for service", slog.String("service", deploymentConfig.Name))
+		return
 	}
 
 	exposedPorts := make(map[uint32]string)
@@ -282,21 +342,29 @@ func (s *supervisor) deployService(ctx context.Context, deploymentConfig Deploym
 	}
 
 	for range containerToDeploy {
-		s.agentService.Direct.ContainerStart(ctx, &protoContainer.ContainerStartRequest{
-			Image:        deploymentConfig.Image,
-			Name:         deploymentConfig.Name + "-" + ContainerNameHash(),
-			ExposedPorts: exposedPorts,
-			Labels: map[string]string{
+		slog.LogAttrs(ctx, slog.LevelInfo, "Starting to deploy container", slog.Any("name", deploymentConfig.Name))
+
+		containerStartRequest := &protoAgent.ContainerStartRequest{}
+		containerStartRequest.SetImage(deploymentConfig.Image)
+		containerStartRequest.SetName(deploymentConfig.Name + "-" + ContainerNameHash())
+		containerStartRequest.SetExposedPorts(exposedPorts)
+		containerStartRequest.SetLabels(
+			map[string]string{
 				"noyra.name":    deploymentConfig.Name,
 				"noyra.type":    deploymentConfig.Type,
 				"noyra.cluster": deploymentConfig.Name,
 				"noyra.domain":  deploymentConfig.Domains[0],
 			},
-		})
+		)
+
+		_, err := s.agentService.Direct.ContainerStart(ctx, containerStartRequest)
+		if err != nil {
+			slog.LogAttrs(ctx, slog.LevelError, "Failed to start container", slog.Any("error", err))
+		}
 	}
 }
 
-func (s *supervisor) generateCertificat() {
+func (s *Supervisor) generateCertificat() {
 	_, errCrt := os.Stat("certs/etcd-ca.crt")
 	_, errKey := os.Stat("certs/etcd-ca.key")
 
@@ -328,17 +396,17 @@ func (s *supervisor) generateCertificat() {
 
 	caBytes, err := x509.CreateCertificate(cryptoRand.Reader, ca, ca, &caPrivKey.PublicKey, caPrivKey)
 	if err != nil {
-		//log.Fatalf("Erreur: %v", err)
+		log.Fatalf("Erreur: %v", err)
 	}
 
 	caPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caBytes})
 	caPrivKeyPEM := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(caPrivKey)})
 
-	if err := os.WriteFile("certs/etcd-ca.crt", caPEM, 0644); err != nil {
-		//log.Fatal(err)
+	if errCa := os.WriteFile("certs/etcd-ca.crt", caPEM, 0644); err != nil {
+		log.Fatal(errCa)
 	}
-	if err := os.WriteFile("certs/etcd-ca.key", caPrivKeyPEM, 0600); err != nil {
-		//log.Fatal(err)
+	if errCaPriv := os.WriteFile("certs/etcd-ca.key", caPrivKeyPEM, 0600); err != nil {
+		log.Fatal(errCaPriv)
 	}
 
 	// Générer un nouveau certificat serveur
@@ -369,11 +437,12 @@ func (s *supervisor) generateCertificat() {
 	serverPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: serverBytes})
 	serverPrivKeyPEM := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(serverPrivKey)})
 
-	if err := os.WriteFile("certs/etcd-server.crt", serverPEM, 0644); err != nil {
-		// log.Fatal(err)
+	if errCrt := os.WriteFile("certs/etcd-server.crt", serverPEM, 0644); err != nil {
+		log.Fatal(errCrt)
 	}
-	if err := os.WriteFile("certs/etcd-server.key", serverPrivKeyPEM, 0600); err != nil {
-		// log.Fatal(err)
+
+	if errPriv := os.WriteFile("certs/etcd-server.key", serverPrivKeyPEM, 0600); err != nil {
+		log.Fatal(errPriv)
 	}
 
 	// Générer un nouveau certificat client
@@ -412,12 +481,14 @@ func (s *supervisor) generateCertificat() {
 	// log.Println("Nouveaux certificats générés avec succès")
 }
 
-func (s *supervisor) initEtcd(ctx context.Context) {
-	containersList, err := s.agentService.Direct.ContainerList(ctx, &protoAgent.ContainerListRequest{
-		Labels: map[string]string{
+func (s *Supervisor) initEtcd(ctx context.Context) {
+	containerListRequest := &protoAgent.ContainerListRequest{}
+	containerListRequest.SetLabels(
+		map[string]string{
 			"noyra.name": "noyra-etcd",
 		},
-	})
+	)
+	containersList, err := s.agentService.Direct.ContainerList(ctx, containerListRequest)
 
 	if len(containersList.GetContainers()) > 0 {
 		slog.LogAttrs(ctx, slog.LevelInfo, "Noyra Etcd already running")
@@ -425,11 +496,26 @@ func (s *supervisor) initEtcd(ctx context.Context) {
 	}
 
 	certPath := "/mnt/data/src/go/noyra/certs"
+	containerMount := &protoAgent.ContainerMount{}
+	containerMount.SetDestination("/certs")
+	containerMount.SetType("bind")
+	containerMount.SetSource(certPath)
+	containerMount.SetOptions([]string{"rbind", "ro"})
 
-	startRequest := &protoAgent.ContainerStartRequest{
-		Image: "bitnami/etcd:3.5.21",
-		Name:  "noyra-etcd",
-		Env: map[string]string{
+	containerVolume := &protoAgent.ContainerVolume{}
+	containerVolume.SetDestination("/bitnami/etcd/data")
+	containerVolume.SetSource("noyra-etcd-data")
+	containerVolume.SetOptions([]string{"U"})
+
+	containerPortMapping := &protoAgent.ContainerPortMapping{}
+	containerPortMapping.SetContainerPort(2379)
+	containerPortMapping.SetHostPort(2379)
+
+	startRequest := &protoAgent.ContainerStartRequest{}
+	startRequest.SetImage("bitnami/etcd:3.5.21")
+	startRequest.SetName("noyra-etcd")
+	startRequest.SetEnv(
+		map[string]string{
 			"ALLOW_NONE_AUTHENTICATION":  "true",
 			"BITNAMI_DEBUG":              "true",
 			"ETCD_FORCE_NEW_CLUSTER":     "true",
@@ -441,35 +527,21 @@ func (s *supervisor) initEtcd(ctx context.Context) {
 			"ETCD_CERT_FILE":             "/certs/etcd-server.crt",
 			"ETCD_KEY_FILE":              "/certs/etcd-server.key",
 		},
-		ExposedPorts: map[uint32]string{
+	)
+	startRequest.SetExposedPorts(
+		map[uint32]string{
 			2379: "tcp",
 		},
-		Network: "noyra",
-		Labels: map[string]string{
+	)
+	startRequest.SetNetwork("noyra")
+	startRequest.SetLabels(
+		map[string]string{
 			"noyra.name": "noyra-etcd",
 		},
-		Mounts: []*protoAgent.ContainerMount{
-			{
-				Destination: "/certs",
-				Type:        "bind",
-				Source:      certPath,
-				Options:     []string{"rbind", "ro"},
-			},
-		},
-		Volumes: []*protoContainer.ContainerVolume{
-			{
-				Destination: "/bitnami/etcd/data",
-				Source:      "noyra-etcd-data",
-				Options:     []string{"U"},
-			},
-		},
-		PortMappings: []*protoAgent.ContainerPortMapping{
-			{
-				ContainerPort: 2379,
-				HostPort:      2379,
-			},
-		},
-	}
+	)
+	startRequest.SetMounts([]*protoAgent.ContainerMount{containerMount})
+	startRequest.SetVolumes([]*protoAgent.ContainerVolume{containerVolume})
+	startRequest.SetPortMappings([]*protoAgent.ContainerPortMapping{containerPortMapping})
 
 	// Contact the server and print out its response.
 	timeoutCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
@@ -479,8 +551,7 @@ func (s *supervisor) initEtcd(ctx context.Context) {
 		slog.LogAttrs(ctx, slog.LevelError, "Could not start container", slog.Any("error", err))
 		os.Exit(1)
 	}
-	slog.LogAttrs(ctx, slog.LevelInfo, "Container start response", slog.String("status", r.Status))
-
+	slog.LogAttrs(ctx, slog.LevelInfo, "Container start response", slog.String("status", r.GetStatus()))
 }
 
 var rng = rand.New(rand.NewSource(time.Now().UnixNano()))

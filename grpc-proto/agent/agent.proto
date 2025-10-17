@@ -1,6 +1,9 @@
-syntax = "proto3";
+edition = "2023";
 
 option go_package = "blackprism.org/noyra/grpc-proto/agent";
+
+import "google/protobuf/go_features.proto";
+option features.(pb.go).api_level = API_OPAQUE;
 
 package agent;
 
@@ -27,9 +30,9 @@ message ContainerStartRequest {
 
 message ContainerMount {
   string destination = 1;
-	string type = 2;
-	string source = 3;
-	repeated string options = 4;
+  string type = 2;
+  string source = 3;
+  repeated string options = 4;
 }
 
 message ContainerVolume {
@@ -40,7 +43,7 @@ message ContainerVolume {
 
 message ContainerPortMapping {
   uint32 container_port = 1;
-	uint32 host_port = 2;
+  uint32 host_port = 2;
 }
 
 message ContainerStopRequest {
