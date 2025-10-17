@@ -1,6 +1,3 @@
-//go:build ignore
-// +build ignore
-
 package main
 
 import (
@@ -12,9 +9,10 @@ import (
 	"os"
 	"time"
 
-	protoContainer "blackprism.org/noyra/grpc-proto/agent"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+
+	protoContainer "blackprism.org/noyra/grpc-proto/agent"
 )
 
 func main() {
@@ -43,10 +41,12 @@ func main() {
 		startCmd.Parse(os.Args[2:])
 
 		for range 2 {
+			name := "test-nginx-" + ContainerNameHash()
+			image := "nginx:latest"
 			// Créer un conteneur de test (NGINX)
-			startRequest := &protoContainer.ContainerStartRequest{
-				Name:  "test-nginx-" + ContainerNameHash(),
-				Image: "nginx:latest",
+			startRequest := protoContainer.ContainerStartRequest_builder{
+				Name:  &name,
+				Image: &image,
 				ExposedPorts: map[uint32]string{
 					80: "TCP",
 				},
@@ -57,15 +57,15 @@ func main() {
 					"noyra.cluster": "web",
 					"noyra.domain":  "test-nginx",
 				},
-			}
+			}.Build()
 
 			resp, err := client.ContainerStart(ctx, startRequest)
 			if err != nil {
 				log.Fatalf("Erreur lors du démarrage du conteneur: %v", err)
 			}
 
-			fmt.Printf("Réponse: %s\n", resp.Status)
-			fmt.Printf("Message: %s\n", resp.Message)
+			fmt.Printf("Réponse: %s\n", resp.GetStatus())
+			fmt.Printf("Message: %s\n", resp.GetMessage())
 		}
 
 	case "list":

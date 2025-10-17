@@ -15,5 +15,5 @@ deployment: [deploymentName=string]: #Deployment & {
 
 deployment: [_]: _
 if len(deployment) == 0 {
-	_error: "At less one deployment must be config"
+	_error: "At least one deployment must be configured"
 }
