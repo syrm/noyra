@@ -26,9 +26,9 @@ import (
 	"cuelang.org/go/cue/cuecontext"
 	"cuelang.org/go/cue/load"
 
-	"blackprism.org/noyra/agent"
-	"blackprism.org/noyra/etcd"
-	protoAgent "blackprism.org/noyra/grpc-proto/agent"
+	protoAgent "blackprism.org/noyra/api/agent/v1"
+	"blackprism.org/noyra/internal/agent"
+	"blackprism.org/noyra/internal/etcd"
 )
 
 type Config struct {
@@ -167,13 +167,13 @@ func (d *Deployment) ReadFromValue(ctx context.Context, valueBase64 string) erro
 }
 
 type Supervisor struct {
-	agentService *agent.Agent
+	agentService *agent.Server
 	etcdClient   *etcd.Client
 	config       *Config
-	schema       string
+	schema       []byte
 }
 
-func BuildSupervisor(agentService *agent.Agent, etcdClient *etcd.Client, schema string) *Supervisor {
+func BuildSupervisor(agentService *agent.Server, etcdClient *etcd.Client, schema []byte) *Supervisor {
 	return &Supervisor{
 		agentService: agentService,
 		etcdClient:   etcdClient,
@@ -184,7 +184,7 @@ func BuildSupervisor(agentService *agent.Agent, etcdClient *etcd.Client, schema 
 func (s *Supervisor) loadConfig(configDir string) error {
 	cuectx := cuecontext.New()
 
-	schemaVal := cuectx.CompileString(s.schema)
+	schemaVal := cuectx.CompileBytes(s.schema)
 	if schemaVal.Err() != nil {
 		return fmt.Errorf("erreur dans le schéma intégré: %v", schemaVal.Err())
 	}

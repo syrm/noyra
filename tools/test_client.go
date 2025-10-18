@@ -12,7 +12,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
-	protoContainer "blackprism.org/noyra/grpc-proto/agent"
+	"blackprism.org/noyra/api/agent/v1"
 )
 
 func main() {
@@ -32,7 +32,7 @@ func main() {
 	}
 	defer conn.Close()
 
-	client := protoContainer.NewAgentClient(conn)
+	client := v1.NewAgentClient(conn)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -44,7 +44,7 @@ func main() {
 			name := "test-nginx-" + ContainerNameHash()
 			image := "nginx:latest"
 			// Créer un conteneur de test (NGINX)
-			startRequest := protoContainer.ContainerStartRequest_builder{
+			startRequest := v1.ContainerStartRequest_builder{
 				Name:  &name,
 				Image: &image,
 				ExposedPorts: map[uint32]string{

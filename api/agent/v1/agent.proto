@@ -1,18 +1,16 @@
 edition = "2023";
 
-option go_package = "blackprism.org/noyra/grpc-proto/agent";
-
 import "google/protobuf/go_features.proto";
 option features.(pb.go).api_level = API_OPAQUE;
 
-package agent;
+package agent.v1;
 
-service Agent {
-  rpc ContainerStart (ContainerStartRequest) returns (Response) {}
-  rpc ContainerStop (ContainerStopRequest) returns (Response) {}
-  rpc ContainerRemove (ContainerRemoveRequest) returns (Response) {}
+service AgentService {
+  rpc ContainerStart (ContainerStartRequest) returns (ContainerStartResponse) {}
+  rpc ContainerStop (ContainerStopRequest) returns (ContainerStopResponse) {}
+  rpc ContainerRemove (ContainerRemoveRequest) returns (ContainerRemoveResponse) {}
   rpc ContainerList (ContainerListRequest) returns (ContainerListResponse) {}
-  rpc ContainerListener (ContainerListenerRequest) returns (stream ContainerEvent) {}
+
 }
 
 message ContainerStartRequest {
@@ -46,21 +44,35 @@ message ContainerPortMapping {
   uint32 host_port = 2;
 }
 
+message ContainerStartResponse {
+  string status = 1;
+  string message = 2;
+}
+
 message ContainerStopRequest {
-  string containerId = 1;
+  string container_id = 1;
+}
+
+message ContainerStopResponse {
+  string status = 1;
+  string message = 2;
 }
 
 message ContainerRemoveRequest {
-  string containerId = 1;
+  string container_id = 1;
+}
+
+message ContainerRemoveResponse {
+  string status = 1;
+  string message = 2;
 }
 
 message ContainerInfoRequest {
-  string containerId = 1;
+  string container_id = 1;
 }
 
-
 message ContainerListRequest {
-  repeated string containersId = 1;
+  repeated string containers_id = 1;
   map<string, string> labels = 2;
 }
 
@@ -72,19 +84,14 @@ message ContainerInfo {
   string id = 1;
   string name = 2;
   map<string, string> labels = 3;
-  string IPAddress = 4;
-  int32 exposedPort = 5;
+  string ip_address = 4;
+  int32 exposed_port = 5;
   string state = 6;
 }
 
 message ContainerListenerRequest {}
 
-message ContainerEvent {
+message ContainerListenerResponse {
   string id = 1;
   string action = 2;
-}
-
-message Response {
-  string status = 1;
-  string message = 2;
 }
