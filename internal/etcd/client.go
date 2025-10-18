@@ -18,8 +18,8 @@ type Client struct {
 	client *clientv3.Client
 }
 
-func BuildEtcdClient(ctx context.Context) (*Client, error) {
-	caCert, err := os.ReadFile("./certs/etcd-ca.crt")
+func BuildEtcdClient(ctx context.Context, caCertFile string, clientCertFile string, clientKeyFile string) (*Client, error) {
+	caCert, err := os.ReadFile(caCertFile)
 	if err != nil {
 		slog.LogAttrs(ctx, slog.LevelError, "error loading CA certificate", slog.Any("error", err))
 		return nil, err
@@ -28,7 +28,7 @@ func BuildEtcdClient(ctx context.Context) (*Client, error) {
 	caCertPool := x509.NewCertPool()
 	caCertPool.AppendCertsFromPEM(caCert)
 
-	cert, err := tls.LoadX509KeyPair("./certs/etcd-client.crt", "./certs/etcd-client.key")
+	cert, err := tls.LoadX509KeyPair(clientCertFile, clientKeyFile)
 	if err != nil {
 		slog.LogAttrs(ctx, slog.LevelError, "error loading client certificate", slog.Any("error", err))
 		return nil, err

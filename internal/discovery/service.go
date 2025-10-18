@@ -7,8 +7,7 @@ import (
 	"os"
 	"time"
 
-	protoAgent "blackprism.org/noyra/api/agent/v1"
-	"blackprism.org/noyra/internal/agent"
+	"google.golang.org/protobuf/types/known/structpb"
 
 	cluster "github.com/envoyproxy/go-control-plane/envoy/config/cluster/v3"
 	core "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
@@ -30,6 +29,9 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/durationpb"
+
+	protoAgent "blackprism.org/noyra/api/agent/v1"
+	"blackprism.org/noyra/internal/agent"
 )
 
 const (
@@ -44,6 +46,7 @@ type Service struct {
 	nodeID       string
 	agent        *agent.Server
 	resources    map[string]map[resource.Type][]types.Resource
+	containers   map[string]string
 }
 
 func BuildDiscoveryService(ctx context.Context, nodeID string, agent *agent.Server) *Service {
@@ -52,6 +55,7 @@ func BuildDiscoveryService(ctx context.Context, nodeID string, agent *agent.Serv
 		nodeID:       nodeID,
 		agent:        agent,
 		resources:    make(map[string]map[resource.Type][]types.Resource),
+		containers:   make(map[string]string),
 	}
 
 	// @TODO est ce que le ctx a une utilité ici ?
@@ -136,6 +140,28 @@ func (ds *Service) getResourcesForSnapshot() map[resource.Type][]types.Resource 
 	return resources
 }
 
+func (ds *Service) findIndexLbEndpointForContainer(clusterName string, containerID string) int {
+	if ds.resources[clusterName] == nil {
+		return -1
+	}
+
+	for index, lbEndPoint := range ds.resources[clusterName][resource.ClusterType][0].(*cluster.Cluster).LoadAssignment.Endpoints[0].LbEndpoints {
+		metadata := lbEndPoint.GetMetadata()
+
+		metadataNoyra, ok := metadata.GetFilterMetadata()["org.blackprism.noyra.container"]
+
+		if !ok {
+			continue
+		}
+
+		if metadataNoyra.GetFields()["id"].GetStringValue() == containerID {
+			return index
+		}
+	}
+
+	return -1
+}
+
 func (ds *Service) addCluster(container *protoAgent.ContainerInfo) {
 	clusterName, ok := container.GetLabels()["noyra.cluster"]
 
@@ -143,8 +169,18 @@ func (ds *Service) addCluster(container *protoAgent.ContainerInfo) {
 		clusterName = container.GetName()
 	}
 
+	containerIndex := ds.findIndexLbEndpointForContainer(clusterName, container.GetId())
+
+	if containerIndex > -1 {
+		return
+	}
+
+	slog.LogAttrs(context.Background(), slog.LevelInfo, "Add Cluster", slog.String("container_id", container.GetId()))
+
+	ds.containers[container.GetId()] = clusterName
+
 	if ds.resources[clusterName] != nil {
-		ds.resources[clusterName][resource.ClusterType][0].(*cluster.Cluster).LoadAssignment.Endpoints[0].LbEndpoints = append(ds.resources[clusterName][resource.ClusterType][0].(*cluster.Cluster).LoadAssignment.Endpoints[0].LbEndpoints, ds.addEndpoint(container.GetIpAddress(), container.GetExposedPort()))
+		ds.resources[clusterName][resource.ClusterType][0].(*cluster.Cluster).LoadAssignment.Endpoints[0].LbEndpoints = append(ds.resources[clusterName][resource.ClusterType][0].(*cluster.Cluster).LoadAssignment.Endpoints[0].LbEndpoints, ds.addEndpoint(container))
 		return
 	}
 
@@ -155,12 +191,32 @@ func (ds *Service) addCluster(container *protoAgent.ContainerInfo) {
 	}
 
 	resources := make(map[resource.Type][]types.Resource)
-	loadAssignment := ds.makeEndpointConfig(clusterName, []*endpoint.LbEndpoint{ds.addEndpoint(container.GetIpAddress(), container.GetExposedPort())})
+	loadAssignment := ds.makeEndpointConfig(clusterName, []*endpoint.LbEndpoint{ds.addEndpoint(container)})
 	resources[resource.ListenerType] = append(resources[resource.ListenerType], ds.makeListenerConfig(container.GetName()))
 	resources[resource.RouteType] = append(resources[resource.RouteType], ds.makeRouteConfig(clusterName, clusterDomain, container.GetName()))
 	resources[resource.ClusterType] = append(resources[resource.ClusterType], ds.makeClusterConfig(clusterName, loadAssignment))
 
 	ds.resources[clusterName] = resources
+}
+
+func (ds *Service) removeCluster(containerID string) {
+	clusterName, ok := ds.containers[containerID]
+
+	if !ok {
+		return
+	}
+
+	delete(ds.containers, containerID)
+
+	containerIndex := ds.findIndexLbEndpointForContainer(clusterName, containerID)
+
+	if containerIndex == -1 {
+		return
+	}
+
+	lbEndpoints := ds.resources[clusterName][resource.ClusterType][0].(*cluster.Cluster).LoadAssignment.Endpoints[0].LbEndpoints
+
+	ds.resources[clusterName][resource.ClusterType][0].(*cluster.Cluster).LoadAssignment.Endpoints[0].LbEndpoints = append(lbEndpoints[:containerIndex], lbEndpoints[containerIndex+1:]...)
 }
 
 func (ds *Service) makeConfigSource() *core.ConfigSource {
@@ -279,16 +335,25 @@ func (ds *Service) makeEndpointConfig(clusterName string, endpoints []*endpoint.
 	}
 }
 
-func (ds *Service) addEndpoint(ipAddress string, port int32) *endpoint.LbEndpoint {
+func (ds *Service) addEndpoint(container *protoAgent.ContainerInfo) *endpoint.LbEndpoint {
 	return &endpoint.LbEndpoint{
+		Metadata: &core.Metadata{
+			FilterMetadata: map[string]*structpb.Struct{
+				"org.blackprism.noyra.container": {
+					Fields: map[string]*structpb.Value{
+						"id": structpb.NewStringValue(container.GetId()),
+					},
+				},
+			},
+		},
 		HostIdentifier: &endpoint.LbEndpoint_Endpoint{
 			Endpoint: &endpoint.Endpoint{
 				Address: &core.Address{
 					Address: &core.Address_SocketAddress{
 						SocketAddress: &core.SocketAddress{
-							Address: ipAddress,
+							Address: container.GetIpAddress(),
 							PortSpecifier: &core.SocketAddress_PortValue{
-								PortValue: uint32(port),
+								PortValue: uint32(container.GetExposedPort()),
 							},
 						},
 					},
@@ -334,9 +399,11 @@ func (ds *Service) eventListener(ctx context.Context) {
 			continue
 		}
 
-		if event.GetAction() == "die" || event.GetAction() == "stop" {
-			// @TODO a faire
-			continue
+		if event.GetAction() == "died" || event.GetAction() == "stop" {
+			slog.LogAttrs(ctx, slog.LevelInfo, "DS Service Event received", slog.String("event", event.GetAction()))
+
+			ds.removeCluster(event.GetId())
+			ds.SetSnapshot(ctx, ds.getResourcesForSnapshot())
 		}
 	}
 }

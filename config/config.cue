@@ -3,8 +3,8 @@ package noyra
 deployment: {
 	"smallapp": {
 		domains: ["smallapp.local"]
-		image: "nginx:latest"
-		expose: ["80/tcp"]
+		image: "stefanprodan/podinfo"
+		expose: ["9898/tcp"]
 	  type: "http"
 	  replicas: 3
 	}

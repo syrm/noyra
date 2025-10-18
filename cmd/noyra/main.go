@@ -69,7 +69,13 @@ func main() {
 	// 	time.Sleep(1 * time.Second)
 	// }
 
-	etcdClient, _ := etcd.BuildEtcdClient(ctx)
+	etcdClient, errEtcd := etcd.BuildEtcdClient(ctx, os.Getenv("ETCD_CA_CERT"), os.Getenv("ETCD_CLIENT_CERT"), os.Getenv("ETCD_CLIENT_KEY"))
+
+	if errEtcd != nil {
+		slog.LogAttrs(ctx, slog.LevelError, "Error connecting to etcd", slog.Any("error", errEtcd))
+		os.Exit(1)
+	}
+
 	supervisorServer := supervisor.BuildSupervisor(agentService, etcdClient, config.Schema)
 
 	go supervisorServer.Run(ctx)
