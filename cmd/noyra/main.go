@@ -1,5 +1,3 @@
-//go:generate protoc --go_out=./grpc-proto --go_opt=paths=source_relative --go-grpc_out=./grpc-proto --go-grpc_opt=paths=source_relative -I=./grpc-proto ./grpc-proto/agent/agent.proto
-
 package main
 
 import (
@@ -12,15 +10,13 @@ import (
 	"github.com/containers/podman/v5/pkg/bindings"
 	gopsAgent "github.com/google/gops/agent"
 
-	"blackprism.org/noyra/agent"
-	"blackprism.org/noyra/api_server"
-	"blackprism.org/noyra/discovery_service"
-	"blackprism.org/noyra/etcd"
-	"blackprism.org/noyra/supervisor"
+	"blackprism.org/noyra/config"
+	"blackprism.org/noyra/internal/agent"
+	"blackprism.org/noyra/internal/api"
+	"blackprism.org/noyra/internal/discovery"
+	"blackprism.org/noyra/internal/etcd"
+	"blackprism.org/noyra/internal/supervisor"
 )
-
-//go:embed config/schema.cue
-var embeddedSchema string
 
 func main() {
 	go func() {
@@ -66,7 +62,7 @@ func main() {
 		os.Exit(exitCode)
 	}()
 
-	ds := discovery_service.BuildDiscoveryService(ctx, "noyra-id", agentService)
+	ds := discovery.BuildDiscoveryService(ctx, "noyra-id", agentService)
 	go ds.Run(ctx)
 
 	// for {
@@ -74,12 +70,12 @@ func main() {
 	// }
 
 	etcdClient, _ := etcd.BuildEtcdClient(ctx)
-	supervisorServer := supervisor.BuildSupervisor(agentService, etcdClient, embeddedSchema)
+	supervisorServer := supervisor.BuildSupervisor(agentService, etcdClient, config.Schema)
 
 	go supervisorServer.Run(ctx)
 
-	// Initialize and start the API server
-	apiServer := api_server.BuildAPIServer(etcdClient)
+	// Initialize and start the Client server
+	apiServer := api.BuildAPIServer(etcdClient)
 	go apiServer.Run(ctx)
 
 	for {

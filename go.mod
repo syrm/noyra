@@ -10,6 +10,7 @@ require (
 	github.com/fullstorydev/grpchan v1.1.1
 	github.com/google/gops v0.3.28
 	github.com/google/uuid v1.6.0
+	github.com/joho/godotenv v1.5.1
 	github.com/opencontainers/runtime-spec v1.2.0
 	google.golang.org/grpc v1.71.0
 	google.golang.org/protobuf v1.36.5

@@ -1,4 +1,4 @@
-package api_server
+package api
 
 import (
 	"context"
@@ -8,33 +8,33 @@ import (
 	"strings"
 	"time"
 
-	"blackprism.org/noyra/etcd"
-	"blackprism.org/noyra/supervisor"
+	"blackprism.org/noyra/internal/etcd"
+	"blackprism.org/noyra/internal/supervisor"
 )
 
-type ApiServer struct {
+type Server struct {
 	etcdClient *etcd.Client
 }
 
-// BuildAPIServer creates a new API server
-func BuildAPIServer(etcdClient *etcd.Client) *ApiServer {
-	return &ApiServer{
+// BuildAPIServer creates a new Client server
+func BuildAPIServer(etcdClient *etcd.Client) *Server {
+	return &Server{
 		etcdClient: etcdClient,
 	}
 }
 
-// Run starts the API server
-func (a *ApiServer) Run(ctx context.Context) {
+// Run starts the Client server
+func (a *Server) Run(ctx context.Context) {
 	http.HandleFunc("/deployments", a.handleDeployments)
 
-	slog.LogAttrs(ctx, slog.LevelInfo, "API server started", slog.Int("port", 8080))
+	slog.LogAttrs(ctx, slog.LevelInfo, "Client server started", slog.Int("port", 8080))
 	if err := http.ListenAndServe("0.0.0.0:8080", nil); err != nil {
-		slog.LogAttrs(ctx, slog.LevelError, "Error starting API server", slog.Any("error", err))
+		slog.LogAttrs(ctx, slog.LevelError, "Error starting Client server", slog.Any("error", err))
 	}
 }
 
 // handleDeployments handles the /deployments endpoint
-func (a *ApiServer) handleDeployments(w http.ResponseWriter, r *http.Request) {
+func (a *Server) handleDeployments(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	ctxWithTimeout, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
