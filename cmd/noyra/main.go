@@ -71,7 +71,7 @@ func main() {
 
 	etcdClient, errEtcd := etcd.BuildEtcdClient(ctx, os.Getenv("ETCD_CA_CERT"), os.Getenv("ETCD_CLIENT_CERT"), os.Getenv("ETCD_CLIENT_KEY"))
 
-	if err != nil {
+	if errEtcd != nil {
 		slog.LogAttrs(ctx, slog.LevelError, "Error connecting to etcd", slog.Any("error", errEtcd))
 		os.Exit(1)
 	}
