@@ -19,11 +19,10 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	AgentService_ContainerStart_FullMethodName    = "/agent.v1.AgentService/ContainerStart"
-	AgentService_ContainerStop_FullMethodName     = "/agent.v1.AgentService/ContainerStop"
-	AgentService_ContainerRemove_FullMethodName   = "/agent.v1.AgentService/ContainerRemove"
-	AgentService_ContainerList_FullMethodName     = "/agent.v1.AgentService/ContainerList"
-	AgentService_ContainerListener_FullMethodName = "/agent.v1.AgentService/ContainerListener"
+	AgentService_ContainerStart_FullMethodName  = "/agent.v1.AgentService/ContainerStart"
+	AgentService_ContainerStop_FullMethodName   = "/agent.v1.AgentService/ContainerStop"
+	AgentService_ContainerRemove_FullMethodName = "/agent.v1.AgentService/ContainerRemove"
+	AgentService_ContainerList_FullMethodName   = "/agent.v1.AgentService/ContainerList"
 )
 
 // AgentServiceClient is the client API for AgentService service.
@@ -34,7 +33,6 @@ type AgentServiceClient interface {
 	ContainerStop(ctx context.Context, in *ContainerStopRequest, opts ...grpc.CallOption) (*ContainerStopResponse, error)
 	ContainerRemove(ctx context.Context, in *ContainerRemoveRequest, opts ...grpc.CallOption) (*ContainerRemoveResponse, error)
 	ContainerList(ctx context.Context, in *ContainerListRequest, opts ...grpc.CallOption) (*ContainerListResponse, error)
-	ContainerListener(ctx context.Context, in *ContainerListenerRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ContainerListenerResponse], error)
 }
 
 type agentServiceClient struct {
@@ -85,25 +83,6 @@ func (c *agentServiceClient) ContainerList(ctx context.Context, in *ContainerLis
 	return out, nil
 }
 
-func (c *agentServiceClient) ContainerListener(ctx context.Context, in *ContainerListenerRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ContainerListenerResponse], error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &AgentService_ServiceDesc.Streams[0], AgentService_ContainerListener_FullMethodName, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	x := &grpc.GenericClientStream[ContainerListenerRequest, ContainerListenerResponse]{ClientStream: stream}
-	if err := x.ClientStream.SendMsg(in); err != nil {
-		return nil, err
-	}
-	if err := x.ClientStream.CloseSend(); err != nil {
-		return nil, err
-	}
-	return x, nil
-}
-
-// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type AgentService_ContainerListenerClient = grpc.ServerStreamingClient[ContainerListenerResponse]
-
 // AgentServiceServer is the server API for AgentService service.
 // All implementations must embed UnimplementedAgentServiceServer
 // for forward compatibility.
@@ -112,7 +91,6 @@ type AgentServiceServer interface {
 	ContainerStop(context.Context, *ContainerStopRequest) (*ContainerStopResponse, error)
 	ContainerRemove(context.Context, *ContainerRemoveRequest) (*ContainerRemoveResponse, error)
 	ContainerList(context.Context, *ContainerListRequest) (*ContainerListResponse, error)
-	ContainerListener(*ContainerListenerRequest, grpc.ServerStreamingServer[ContainerListenerResponse]) error
 	mustEmbedUnimplementedAgentServiceServer()
 }
 
@@ -134,9 +112,6 @@ func (UnimplementedAgentServiceServer) ContainerRemove(context.Context, *Contain
 }
 func (UnimplementedAgentServiceServer) ContainerList(context.Context, *ContainerListRequest) (*ContainerListResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ContainerList not implemented")
-}
-func (UnimplementedAgentServiceServer) ContainerListener(*ContainerListenerRequest, grpc.ServerStreamingServer[ContainerListenerResponse]) error {
-	return status.Errorf(codes.Unimplemented, "method ContainerListener not implemented")
 }
 func (UnimplementedAgentServiceServer) mustEmbedUnimplementedAgentServiceServer() {}
 func (UnimplementedAgentServiceServer) testEmbeddedByValue()                      {}
@@ -231,17 +206,6 @@ func _AgentService_ContainerList_Handler(srv interface{}, ctx context.Context, d
 	return interceptor(ctx, in, info, handler)
 }
 
-func _AgentService_ContainerListener_Handler(srv interface{}, stream grpc.ServerStream) error {
-	m := new(ContainerListenerRequest)
-	if err := stream.RecvMsg(m); err != nil {
-		return err
-	}
-	return srv.(AgentServiceServer).ContainerListener(m, &grpc.GenericServerStream[ContainerListenerRequest, ContainerListenerResponse]{ServerStream: stream})
-}
-
-// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type AgentService_ContainerListenerServer = grpc.ServerStreamingServer[ContainerListenerResponse]
-
 // AgentService_ServiceDesc is the grpc.ServiceDesc for AgentService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -266,12 +230,6 @@ var AgentService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _AgentService_ContainerList_Handler,
 		},
 	},
-	Streams: []grpc.StreamDesc{
-		{
-			StreamName:    "ContainerListener",
-			Handler:       _AgentService_ContainerListener_Handler,
-			ServerStreams: true,
-		},
-	},
+	Streams:  []grpc.StreamDesc{},
 	Metadata: "agent/v1/agent.proto",
 }

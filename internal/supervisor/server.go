@@ -18,8 +18,8 @@ import (
 	"cuelang.org/go/cue/cuecontext"
 	"cuelang.org/go/cue/load"
 
-	protoAgent "blackprism.org/noyra/api/agent/v1"
 	"blackprism.org/noyra/internal/agent"
+	"blackprism.org/noyra/internal/agent/component"
 	"blackprism.org/noyra/internal/etcd"
 )
 
@@ -159,13 +159,13 @@ func (d *Deployment) ReadFromValue(ctx context.Context, valueBase64 string) erro
 }
 
 type Supervisor struct {
-	agentService *agent.Server
+	agentService *agent.Agent
 	etcdClient   *etcd.Client
 	config       *Config
 	schema       []byte
 }
 
-func BuildSupervisor(agentService *agent.Server, etcdClient *etcd.Client, schema []byte) *Supervisor {
+func BuildSupervisor(agentService *agent.Agent, etcdClient *etcd.Client, schema []byte) *Supervisor {
 	return &Supervisor{
 		agentService: agentService,
 		etcdClient:   etcdClient,
@@ -240,7 +240,7 @@ func (s *Supervisor) Run(ctx context.Context) {
 }
 
 func (s *Supervisor) saveClusterState(ctx context.Context) {
-	containerLists, err := s.agentService.Direct.ContainerList(ctx, &protoAgent.ContainerListRequest{})
+	containerLists, err := s.agentService.ContainerList(ctx, nil, nil)
 
 	if err != nil {
 		slog.LogAttrs(ctx, slog.LevelError, "error while calling ContainerList", slog.Any("error", err))
@@ -248,8 +248,8 @@ func (s *Supervisor) saveClusterState(ctx context.Context) {
 
 	for _, deploymentConfig := range s.config.Deployment {
 		readyContainers := 0
-		for _, container := range containerLists.GetContainers() {
-			if container.GetLabels()["noyra.name"] == deploymentConfig.Name && container.GetState() == "running" {
+		for _, container := range containerLists {
+			if container.Labels["noyra.name"] == deploymentConfig.Name && container.State == "running" {
 				readyContainers++
 			}
 		}
@@ -281,8 +281,9 @@ func (s *Supervisor) saveClusterState(ctx context.Context) {
 	fmt.Printf("Deployment: %+v\n", d)
 }
 
-func (s *Supervisor) observeCluster(ctx context.Context) {
-	stream, err := s.agentService.Direct.ContainerListener(ctx, &protoAgent.ContainerListenerRequest{})
+func (s *Supervisor) observeCluster(ctx context.Context) error {
+	containerListenerResponseChan := make(chan component.ContainerListenerResponse, 1000)
+	err := s.agentService.ContainerListener(ctx, containerListenerResponseChan)
 
 	if err != nil {
 		slog.LogAttrs(ctx, slog.LevelError, "error while calling ContainerListener", slog.Any("error", err))
@@ -290,28 +291,29 @@ func (s *Supervisor) observeCluster(ctx context.Context) {
 	}
 
 	for {
-		feature, _ := stream.Recv()
-		slog.LogAttrs(ctx, slog.LevelInfo, "container event received", slog.Any("feature", feature))
+		select {
+		case event := <-containerListenerResponseChan:
+			slog.LogAttrs(ctx, slog.LevelInfo, "container event received", slog.Any("event", event))
+
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 	}
 }
 
 func (s *Supervisor) deployService(ctx context.Context, deploymentConfig DeploymentConfig) {
-	// @TODO containersList or containerLists or other ?
-	containerListRequest := &protoAgent.ContainerListRequest{}
-	containerListRequest.SetLabels(
-		map[string]string{
-			"noyra.name": deploymentConfig.Name,
-		},
+	containersList, err := s.agentService.ContainerList(
+		ctx,
+		nil,
+		map[string]string{"noyra.name": deploymentConfig.Name},
 	)
-
-	containersList, err := s.agentService.Direct.ContainerList(ctx, containerListRequest)
 
 	if err != nil {
 		slog.LogAttrs(ctx, slog.LevelError, "failed to get containers", slog.Any("error", err))
 		return
 	}
 
-	containerToDeploy := max(deploymentConfig.Replicas-len(containersList.GetContainers()), 0)
+	containerToDeploy := max(deploymentConfig.Replicas-len(containersList), 0)
 
 	if containerToDeploy == 0 {
 		slog.LogAttrs(ctx, slog.LevelInfo, "no new container to deploy for service", slog.String("service", deploymentConfig.Name))
@@ -335,77 +337,74 @@ func (s *Supervisor) deployService(ctx context.Context, deploymentConfig Deploym
 	for range containerToDeploy {
 		slog.LogAttrs(ctx, slog.LevelInfo, "starting to deploy container", slog.Any("name", deploymentConfig.Name))
 
-		containerStartRequest := &protoAgent.ContainerStartRequest{}
-		containerStartRequest.SetImage(deploymentConfig.Image)
-		containerStartRequest.SetName(deploymentConfig.Name + "-" + ContainerNameHash())
-		containerStartRequest.SetExposedPorts(exposedPorts)
-		containerStartRequest.SetLabels(
-			map[string]string{
+		containerStartRequest := component.ContainerRequest{
+			Image:        deploymentConfig.Image,
+			Name:         deploymentConfig.Name + "-" + ContainerNameHash(),
+			ExposedPorts: exposedPorts,
+			Labels: map[string]string{
 				"noyra.name":    deploymentConfig.Name,
 				"noyra.type":    deploymentConfig.Type,
 				"noyra.cluster": deploymentConfig.Name,
 				"noyra.domain":  deploymentConfig.Domains[0],
 			},
-		)
+		}
 
-		_, err := s.agentService.Direct.ContainerStart(ctx, containerStartRequest)
-		if err != nil {
-			slog.LogAttrs(ctx, slog.LevelError, "failed to start container", slog.Any("error", err))
+		_, errContainerStart := s.agentService.ContainerStart(ctx, containerStartRequest)
+		if errContainerStart != nil {
+			slog.LogAttrs(ctx, slog.LevelError, "failed to start container", slog.Any("error", errContainerStart))
 		}
 	}
 }
 
 func (s *Supervisor) initEtcd(ctx context.Context) {
-	containerListRequest := &protoAgent.ContainerListRequest{}
-	containerListRequest.SetLabels(
-		map[string]string{
-			"noyra.name": "noyra-etcd",
-		},
-	)
-	containersList, err := s.agentService.Direct.ContainerList(ctx, containerListRequest)
+	containersList, err := s.agentService.ContainerList(ctx, nil, map[string]string{"noyra.name": "noyra-etcd"})
 
-	if len(containersList.GetContainers()) > 0 {
+	if len(containersList) > 0 {
 		slog.LogAttrs(ctx, slog.LevelInfo, "noyra Etcd already running")
 		return
 	}
 
-	var mounts []*protoAgent.ContainerMount
+	var mounts []component.ContainerMount
 
-	containerMountEtcdCa := &protoAgent.ContainerMount{}
-	containerMountEtcdCa.SetDestination("/certs/etcd-ca.crt")
-	containerMountEtcdCa.SetType("bind")
-	containerMountEtcdCa.SetSource(s.etcdClient.GetCaCertFile())
-	containerMountEtcdCa.SetOptions([]string{"rbind", "ro"})
+	containerMountEtcdCa := component.ContainerMount{
+		Destination: "/certs/etcd-ca.crt",
+		Type:        "bind",
+		Source:      s.etcdClient.GetCaCertFile(),
+		Options:     []string{"rbind", "ro"},
+	}
 	mounts = append(mounts, containerMountEtcdCa)
 
-	containerMountEtcdServerCert := &protoAgent.ContainerMount{}
-	containerMountEtcdServerCert.SetDestination("/certs/etcd-server.crt")
-	containerMountEtcdServerCert.SetType("bind")
-	containerMountEtcdServerCert.SetSource(s.etcdClient.GetServerCertFile())
-	containerMountEtcdServerCert.SetOptions([]string{"rbind", "ro"})
+	containerMountEtcdServerCert := component.ContainerMount{
+		Destination: "/certs/etcd-server.crt",
+		Type:        "bind",
+		Source:      s.etcdClient.GetServerCertFile(),
+		Options:     []string{"rbind", "ro"},
+	}
 	mounts = append(mounts, containerMountEtcdServerCert)
 
-	containerMountEtcdServerKey := &protoAgent.ContainerMount{}
-	containerMountEtcdServerKey.SetDestination("/certs/etcd-server.key")
-	containerMountEtcdServerKey.SetType("bind")
-	containerMountEtcdServerKey.SetSource(s.etcdClient.GetServerKeyFile())
-	containerMountEtcdServerKey.SetOptions([]string{"rbind", "ro"})
+	containerMountEtcdServerKey := component.ContainerMount{
+		Destination: "/certs/etcd-server.key",
+		Type:        "bind",
+		Source:      s.etcdClient.GetServerKeyFile(),
+		Options:     []string{"rbind", "ro"},
+	}
 	mounts = append(mounts, containerMountEtcdServerKey)
 
-	containerVolume := &protoAgent.ContainerVolume{}
-	containerVolume.SetDestination("/bitnami/etcd/data")
-	containerVolume.SetSource("noyra-etcd-data")
-	containerVolume.SetOptions([]string{"U"})
+	containerVolume := component.ContainerVolume{
+		Destination: "/bitnami/etcd/data",
+		Source:      "noyra-etcd-data",
+		Options:     []string{"U"},
+	}
 
-	containerPortMapping := &protoAgent.ContainerPortMapping{}
-	containerPortMapping.SetContainerPort(2379)
-	containerPortMapping.SetHostPort(2379)
+	containerPortMapping := component.ContainerPortMapping{
+		ContainerPort: 2379,
+		HostPort:      2379,
+	}
 
-	startRequest := &protoAgent.ContainerStartRequest{}
-	startRequest.SetImage("bitnami/etcd:3.5.21")
-	startRequest.SetName("noyra-etcd")
-	startRequest.SetEnv(
-		map[string]string{
+	startRequest := component.ContainerRequest{
+		Image: "bitnami/etcd:3.5.21",
+		Name:  "noyra-etcd",
+		Env: map[string]string{
 			"ALLOW_NONE_AUTHENTICATION":  "true",
 			"BITNAMI_DEBUG":              "true",
 			"ETCD_FORCE_NEW_CLUSTER":     "true",
@@ -417,26 +416,22 @@ func (s *Supervisor) initEtcd(ctx context.Context) {
 			"ETCD_CERT_FILE":             "/certs/etcd-server.crt",
 			"ETCD_KEY_FILE":              "/certs/etcd-server.key",
 		},
-	)
-	startRequest.SetExposedPorts(
-		map[uint32]string{
+		ExposedPorts: map[uint32]string{
 			2379: "tcp",
 		},
-	)
-	startRequest.SetNetwork("noyra")
-	startRequest.SetLabels(
-		map[string]string{
+		Network: "noyra",
+		Labels: map[string]string{
 			"noyra.name": "noyra-etcd",
 		},
-	)
-	startRequest.SetMounts(mounts)
-	startRequest.SetVolumes([]*protoAgent.ContainerVolume{containerVolume})
-	startRequest.SetPortMappings([]*protoAgent.ContainerPortMapping{containerPortMapping})
+		Mounts:       mounts,
+		Volumes:      []component.ContainerVolume{containerVolume},
+		PortMappings: []component.ContainerPortMapping{containerPortMapping},
+	}
 
 	// Contact the server and print out its response.
 	timeoutCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
-	r, err := s.agentService.Direct.ContainerStart(timeoutCtx, startRequest)
+	r, err := s.agentService.ContainerStart(timeoutCtx, startRequest)
 	if err != nil {
 		slog.LogAttrs(ctx, slog.LevelError, "could not start container", slog.Any("error", err))
 		os.Exit(1)

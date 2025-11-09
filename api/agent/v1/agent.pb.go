@@ -1807,13 +1807,12 @@ const file_agent_v1_agent_proto_rawDesc = "" +
 	"\x18ContainerListenerRequest\"C\n" +
 	"\x19ContainerListenerResponse\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x16\n" +
-	"\x06action\x18\x02 \x01(\tR\x06action2\xc9\x03\n" +
+	"\x06action\x18\x02 \x01(\tR\x06action2\xe7\x02\n" +
 	"\fAgentService\x12U\n" +
 	"\x0eContainerStart\x12\x1f.agent.v1.ContainerStartRequest\x1a .agent.v1.ContainerStartResponse\"\x00\x12R\n" +
 	"\rContainerStop\x12\x1e.agent.v1.ContainerStopRequest\x1a\x1f.agent.v1.ContainerStopResponse\"\x00\x12X\n" +
 	"\x0fContainerRemove\x12 .agent.v1.ContainerRemoveRequest\x1a!.agent.v1.ContainerRemoveResponse\"\x00\x12R\n" +
-	"\rContainerList\x12\x1e.agent.v1.ContainerListRequest\x1a\x1f.agent.v1.ContainerListResponse\"\x00\x12`\n" +
-	"\x11ContainerListener\x12\".agent.v1.ContainerListenerRequest\x1a#.agent.v1.ContainerListenerResponse\"\x000\x01B\x8e\x01\n" +
+	"\rContainerList\x12\x1e.agent.v1.ContainerListRequest\x1a\x1f.agent.v1.ContainerListResponse\"\x00B\x8e\x01\n" +
 	"\fcom.agent.v1B\n" +
 	"AgentProtoP\x01Z)blackprism.org/noyra/api/agent/v1;agentv1\xa2\x02\x03AXX\xaa\x02\bAgent.V1\xca\x02\bAgent\\V1\xe2\x02\x14Agent\\V1\\GPBMetadata\xea\x02\tAgent::V1\x92\x03\x05\xd2>\x02\x10\x03b\beditionsp\xe8\a"
 
@@ -1856,14 +1855,12 @@ var file_agent_v1_agent_proto_depIdxs = []int32{
 	5,  // 11: agent.v1.AgentService.ContainerStop:input_type -> agent.v1.ContainerStopRequest
 	7,  // 12: agent.v1.AgentService.ContainerRemove:input_type -> agent.v1.ContainerRemoveRequest
 	10, // 13: agent.v1.AgentService.ContainerList:input_type -> agent.v1.ContainerListRequest
-	13, // 14: agent.v1.AgentService.ContainerListener:input_type -> agent.v1.ContainerListenerRequest
-	4,  // 15: agent.v1.AgentService.ContainerStart:output_type -> agent.v1.ContainerStartResponse
-	6,  // 16: agent.v1.AgentService.ContainerStop:output_type -> agent.v1.ContainerStopResponse
-	8,  // 17: agent.v1.AgentService.ContainerRemove:output_type -> agent.v1.ContainerRemoveResponse
-	11, // 18: agent.v1.AgentService.ContainerList:output_type -> agent.v1.ContainerListResponse
-	14, // 19: agent.v1.AgentService.ContainerListener:output_type -> agent.v1.ContainerListenerResponse
-	15, // [15:20] is the sub-list for method output_type
-	10, // [10:15] is the sub-list for method input_type
+	4,  // 14: agent.v1.AgentService.ContainerStart:output_type -> agent.v1.ContainerStartResponse
+	6,  // 15: agent.v1.AgentService.ContainerStop:output_type -> agent.v1.ContainerStopResponse
+	8,  // 16: agent.v1.AgentService.ContainerRemove:output_type -> agent.v1.ContainerRemoveResponse
+	11, // 17: agent.v1.AgentService.ContainerList:output_type -> agent.v1.ContainerListResponse
+	14, // [14:18] is the sub-list for method output_type
+	10, // [10:14] is the sub-list for method input_type
 	10, // [10:10] is the sub-list for extension type_name
 	10, // [10:10] is the sub-list for extension extendee
 	0,  // [0:10] is the sub-list for field type_name
