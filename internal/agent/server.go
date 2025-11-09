@@ -43,7 +43,7 @@ type Server struct {
 	Direct        protoAgent.AgentServiceClient
 }
 
-func BuildAgent(podmanContext context.Context) *Server {
+func BuildServer(podmanContext context.Context) *Server {
 	a := &Server{
 		podmanContext: podmanContext,
 		serverMux:     http.NewServeMux(),

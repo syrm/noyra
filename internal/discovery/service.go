@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/samber/oops"
 	"google.golang.org/protobuf/types/known/structpb"
 
 	cluster "github.com/envoyproxy/go-control-plane/envoy/config/cluster/v3"
@@ -32,8 +33,8 @@ import (
 	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/durationpb"
 
-	protoAgent "blackprism.org/noyra/api/agent/v1"
 	"blackprism.org/noyra/internal/agent"
+	"blackprism.org/noyra/internal/agent/component"
 )
 
 const (
@@ -46,13 +47,13 @@ const (
 type Service struct {
 	clusterCache   cache.SnapshotCache
 	nodeID         string
-	agent          *agent.Server
+	agent          *agent.Agent
 	resources      map[string]map[resource.Type][]types.Resource
 	containers     map[string]string
 	versionCounter int64
 }
 
-func BuildDiscoveryService(ctx context.Context, nodeID string, agent *agent.Server) *Service {
+func BuildDiscoveryService(ctx context.Context, nodeID string, agent *agent.Agent) *Service {
 	ds := &Service{
 		clusterCache: cache.NewSnapshotCache(false, cache.IDHash{}, nil),
 		nodeID:       nodeID,
@@ -116,15 +117,15 @@ func (ds *Service) SetSnapshot(ctx context.Context, resources map[resource.Type]
 }
 
 func (ds *Service) init(ctx context.Context) {
-	containers, err := ds.agent.ContainerList(ctx, &protoAgent.ContainerListRequest{})
+	containers, err := ds.agent.ContainerList(ctx, nil, nil)
 
 	if err != nil {
 		slog.LogAttrs(ctx, slog.LevelError, "failed to list containers", slog.Any("error", err))
 		return
 	}
 
-	for _, container := range containers.GetContainers() {
-		if container.GetLabels()["noyra.type"] == "http" {
+	for _, container := range containers {
+		if container.Labels["noyra.type"] == "http" {
 			ds.addCluster(container)
 		}
 	}
@@ -167,38 +168,38 @@ func (ds *Service) findIndexLbEndpointForContainer(clusterName string, container
 	return -1
 }
 
-func (ds *Service) addCluster(container *protoAgent.ContainerInfo) {
-	clusterName, ok := container.GetLabels()["noyra.cluster"]
+func (ds *Service) addCluster(container component.Container) {
+	clusterName, ok := container.Labels["noyra.cluster"]
 
 	if !ok {
-		clusterName = container.GetName()
+		clusterName = container.Name
 	}
 
-	containerIndex := ds.findIndexLbEndpointForContainer(clusterName, container.GetId())
+	containerIndex := ds.findIndexLbEndpointForContainer(clusterName, container.ID)
 
 	if containerIndex > -1 {
 		return
 	}
 
-	slog.LogAttrs(context.Background(), slog.LevelInfo, "add Cluster", slog.String("container_id", container.GetId()))
+	slog.LogAttrs(context.Background(), slog.LevelInfo, "add Cluster", slog.String("container_id", container.ID))
 
-	ds.containers[container.GetId()] = clusterName
+	ds.containers[container.ID] = clusterName
 
 	if ds.resources[clusterName] != nil {
 		ds.resources[clusterName][resource.ClusterType][0].(*cluster.Cluster).LoadAssignment.Endpoints[0].LbEndpoints = append(ds.resources[clusterName][resource.ClusterType][0].(*cluster.Cluster).LoadAssignment.Endpoints[0].LbEndpoints, ds.addEndpoint(container))
 		return
 	}
 
-	clusterDomain, ok := container.GetLabels()["noyra.domain"]
+	clusterDomain, ok := container.Labels["noyra.domain"]
 
 	if !ok {
-		clusterDomain = container.GetName()
+		clusterDomain = container.Name
 	}
 
 	resources := make(map[resource.Type][]types.Resource)
 	loadAssignment := ds.makeEndpointConfig(clusterName, []*endpoint.LbEndpoint{ds.addEndpoint(container)})
-	resources[resource.ListenerType] = append(resources[resource.ListenerType], ds.makeListenerConfig(container.GetName()))
-	resources[resource.RouteType] = append(resources[resource.RouteType], ds.makeRouteConfig(clusterName, clusterDomain, container.GetName()))
+	resources[resource.ListenerType] = append(resources[resource.ListenerType], ds.makeListenerConfig(container.Name))
+	resources[resource.RouteType] = append(resources[resource.RouteType], ds.makeRouteConfig(clusterName, clusterDomain, container.Name))
 	resources[resource.ClusterType] = append(resources[resource.ClusterType], ds.makeClusterConfig(clusterName, loadAssignment))
 
 	ds.resources[clusterName] = resources
@@ -340,13 +341,13 @@ func (ds *Service) makeEndpointConfig(clusterName string, endpoints []*endpoint.
 	}
 }
 
-func (ds *Service) addEndpoint(container *protoAgent.ContainerInfo) *endpoint.LbEndpoint {
+func (ds *Service) addEndpoint(container component.Container) *endpoint.LbEndpoint {
 	return &endpoint.LbEndpoint{
 		Metadata: &core.Metadata{
 			FilterMetadata: map[string]*structpb.Struct{
 				"org.blackprism.noyra.container": {
 					Fields: map[string]*structpb.Value{
-						"id": structpb.NewStringValue(container.GetId()),
+						"id": structpb.NewStringValue(container.ID),
 					},
 				},
 			},
@@ -356,9 +357,9 @@ func (ds *Service) addEndpoint(container *protoAgent.ContainerInfo) *endpoint.Lb
 				Address: &core.Address{
 					Address: &core.Address_SocketAddress{
 						SocketAddress: &core.SocketAddress{
-							Address: container.GetIpAddress(),
+							Address: container.IPAddress,
 							PortSpecifier: &core.SocketAddress_PortValue{
-								PortValue: uint32(container.GetExposedPort()),
+								PortValue: uint32(container.ExposedPort),
 							},
 						},
 					},
@@ -368,52 +369,46 @@ func (ds *Service) addEndpoint(container *protoAgent.ContainerInfo) *endpoint.Lb
 	}
 }
 
-func (ds *Service) eventListener(ctx context.Context) {
-	stream, err := ds.agent.Direct.ContainerListener(ctx, &protoAgent.ContainerListenerRequest{})
+func (ds *Service) eventListener(ctx context.Context) error {
+	containerListenerResponseChan := make(chan component.ContainerListenerResponse, 1000)
+	err := ds.agent.ContainerListener(ctx, containerListenerResponseChan)
 
 	if err != nil {
-		slog.LogAttrs(
-			ctx,
-			slog.LevelError,
-			"failed to listen for container events",
-			slog.Any("error", err),
-		)
-		return
+		slog.LogAttrs(ctx, slog.LevelError, "failed to listen for container events", slog.Any("error", err))
+		return oops.Wrapf(err, "failed to listen for container events")
 	}
 
 	for {
-		event, err := stream.Recv()
+		select {
+		case event := <-containerListenerResponseChan:
+			if event.Action == "start" || event.Action == "create" {
+				containersID := []string{event.ID}
+				containersList, errList := ds.agent.ContainerList(ctx, containersID, nil)
 
-		if err != nil {
-			slog.LogAttrs(ctx, slog.LevelWarn, "failed to listen for container events", slog.Any("error", err))
-			continue
-		}
+				if errList != nil {
+					slog.LogAttrs(ctx, slog.LevelWarn, "failed to get container labels", slog.Any("error", errList))
+					continue
+				}
 
-		if event.GetAction() == "start" || event.GetAction() == "create" {
-			containerListRequest := &protoAgent.ContainerListRequest{}
-			containerListRequest.SetContainersId([]string{event.GetId()})
-			containersList, err := ds.agent.Direct.ContainerList(ctx, containerListRequest)
+				container, ok := containersList[event.ID]
+				if !ok {
+					continue
+				}
 
-			if err != nil {
-				slog.LogAttrs(ctx, slog.LevelWarn, "failed to get container labels", slog.Any("error", err))
+				ds.addCluster(container)
+				ds.SetSnapshot(ctx, ds.getResourcesForSnapshot())
 				continue
 			}
 
-			container, ok := containersList.GetContainers()[event.GetId()]
-			if !ok {
-				continue
+			if event.Action == "died" || event.Action == "stop" {
+				slog.LogAttrs(ctx, slog.LevelInfo, "DS Service Event received", slog.String("event", event.Action))
+
+				ds.removeCluster(event.ID)
+				ds.SetSnapshot(ctx, ds.getResourcesForSnapshot())
 			}
 
-			ds.addCluster(container)
-			ds.SetSnapshot(ctx, ds.getResourcesForSnapshot())
-			continue
-		}
-
-		if event.GetAction() == "died" || event.GetAction() == "stop" {
-			slog.LogAttrs(ctx, slog.LevelInfo, "DS Service Event received", slog.String("event", event.GetAction()))
-
-			ds.removeCluster(event.GetId())
-			ds.SetSnapshot(ctx, ds.getResourcesForSnapshot())
+		case <-ctx.Done():
+			return ctx.Err()
 		}
 	}
 }

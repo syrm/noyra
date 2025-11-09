@@ -59,11 +59,6 @@ func main() {
 	}
 
 	agentService := agent.BuildAgent(podmanConnection)
-	go func() {
-		exitCode := agentService.Run(ctx)
-		os.Exit(exitCode)
-	}()
-
 	ds := discovery.BuildDiscoveryService(ctx, "noyra-id", agentService)
 	go ds.Run(ctx)
 
