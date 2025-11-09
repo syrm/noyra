@@ -1296,10 +1296,13 @@ func (b0 ContainerListRequest_builder) Build() *ContainerListRequest {
 }
 
 type ContainerListResponse struct {
-	state                 protoimpl.MessageState    `protogen:"opaque.v1"`
-	xxx_hidden_Containers map[string]*ContainerInfo `protobuf:"bytes,1,rep,name=containers" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
-	unknownFields         protoimpl.UnknownFields
-	sizeCache             protoimpl.SizeCache
+	state                  protoimpl.MessageState    `protogen:"opaque.v1"`
+	xxx_hidden_Status      *string                   `protobuf:"bytes,1,opt,name=status"`
+	xxx_hidden_Containers  map[string]*ContainerInfo `protobuf:"bytes,2,rep,name=containers" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	XXX_raceDetectHookData protoimpl.RaceDetectHookData
+	XXX_presence           [1]uint32
+	unknownFields          protoimpl.UnknownFields
+	sizeCache              protoimpl.SizeCache
 }
 
 func (x *ContainerListResponse) Reset() {
@@ -1327,6 +1330,16 @@ func (x *ContainerListResponse) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
+func (x *ContainerListResponse) GetStatus() string {
+	if x != nil {
+		if x.xxx_hidden_Status != nil {
+			return *x.xxx_hidden_Status
+		}
+		return ""
+	}
+	return ""
+}
+
 func (x *ContainerListResponse) GetContainers() map[string]*ContainerInfo {
 	if x != nil {
 		return x.xxx_hidden_Containers
@@ -1334,13 +1347,31 @@ func (x *ContainerListResponse) GetContainers() map[string]*ContainerInfo {
 	return nil
 }
 
+func (x *ContainerListResponse) SetStatus(v string) {
+	x.xxx_hidden_Status = &v
+	protoimpl.X.SetPresent(&(x.XXX_presence[0]), 0, 2)
+}
+
 func (x *ContainerListResponse) SetContainers(v map[string]*ContainerInfo) {
 	x.xxx_hidden_Containers = v
+}
+
+func (x *ContainerListResponse) HasStatus() bool {
+	if x == nil {
+		return false
+	}
+	return protoimpl.X.Present(&(x.XXX_presence[0]), 0)
+}
+
+func (x *ContainerListResponse) ClearStatus() {
+	protoimpl.X.ClearPresent(&(x.XXX_presence[0]), 0)
+	x.xxx_hidden_Status = nil
 }
 
 type ContainerListResponse_builder struct {
 	_ [0]func() // Prevents comparability and use of unkeyed literals for the builder.
 
+	Status     *string
 	Containers map[string]*ContainerInfo
 }
 
@@ -1348,6 +1379,10 @@ func (b0 ContainerListResponse_builder) Build() *ContainerListResponse {
 	m0 := &ContainerListResponse{}
 	b, x := &b0, m0
 	_, _ = b, x
+	if b.Status != nil {
+		protoimpl.X.SetPresentNonAtomic(&(x.XXX_presence[0]), 0, 2)
+		x.xxx_hidden_Status = b.Status
+	}
 	x.xxx_hidden_Containers = b.Containers
 	return m0
 }
@@ -1785,10 +1820,11 @@ const file_agent_v1_agent_proto_rawDesc = "" +
 	"\x06labels\x18\x02 \x03(\v2*.agent.v1.ContainerListRequest.LabelsEntryR\x06labels\x1a9\n" +
 	"\vLabelsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xc0\x01\n" +
-	"\x15ContainerListResponse\x12O\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xd8\x01\n" +
+	"\x15ContainerListResponse\x12\x16\n" +
+	"\x06status\x18\x01 \x01(\tR\x06status\x12O\n" +
 	"\n" +
-	"containers\x18\x01 \x03(\v2/.agent.v1.ContainerListResponse.ContainersEntryR\n" +
+	"containers\x18\x02 \x03(\v2/.agent.v1.ContainerListResponse.ContainersEntryR\n" +
 	"containers\x1aV\n" +
 	"\x0fContainersEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12-\n" +
