@@ -27,6 +27,6 @@ type ContainerVolume struct {
 }
 
 type ContainerPortMapping struct {
-	ContainerPort int
-	HostPort      int
+	ContainerPort uint32
+	HostPort      uint32
 }

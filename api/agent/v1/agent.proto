@@ -77,7 +77,8 @@ message ContainerListRequest {
 }
 
 message ContainerListResponse {
-  map<string, ContainerInfo> containers = 1;
+  string status = 1;
+  map<string, ContainerInfo> containers = 2;
 }
 
 message ContainerInfo {
