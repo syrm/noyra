@@ -2,9 +2,12 @@ package discovery
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
+	"math"
 	"net"
 	"os"
+	"sync/atomic"
 	"time"
 
 	"google.golang.org/protobuf/types/known/structpb"
@@ -25,7 +28,6 @@ import (
 	"github.com/envoyproxy/go-control-plane/pkg/cache/v3"
 	"github.com/envoyproxy/go-control-plane/pkg/resource/v3"
 	"github.com/envoyproxy/go-control-plane/pkg/server/v3"
-	"github.com/google/uuid"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/durationpb"
@@ -42,11 +44,12 @@ const (
 )
 
 type Service struct {
-	clusterCache cache.SnapshotCache
-	nodeID       string
-	agent        *agent.Server
-	resources    map[string]map[resource.Type][]types.Resource
-	containers   map[string]string
+	clusterCache   cache.SnapshotCache
+	nodeID         string
+	agent          *agent.Server
+	resources      map[string]map[resource.Type][]types.Resource
+	containers     map[string]string
+	versionCounter int64
 }
 
 func BuildDiscoveryService(ctx context.Context, nodeID string, agent *agent.Server) *Service {
@@ -68,7 +71,7 @@ func (ds *Service) Run(ctx context.Context) {
 	grpcServer := grpc.NewServer(grpc.MaxConcurrentStreams(grpcMaxConcurrentStreams))
 	lis, err := net.Listen("tcp", ":18000")
 	if err != nil {
-		slog.LogAttrs(ctx, slog.LevelError, "Failed to listen",
+		slog.LogAttrs(ctx, slog.LevelError, "failed to listen",
 			slog.Any("error", err))
 		os.Exit(1)
 	}
@@ -86,8 +89,10 @@ func (ds *Service) Run(ctx context.Context) {
 		slog.Int("port", 18000))
 
 	if err := grpcServer.Serve(lis); err != nil {
-		slog.LogAttrs(ctx, slog.LevelError, "Error starting server",
-			slog.Any("error", err))
+		slog.LogAttrs(
+			ctx, slog.LevelError, "error starting server",
+			slog.Any("error", err),
+		)
 		os.Exit(1)
 	}
 }
@@ -96,14 +101,14 @@ func (ds *Service) SetSnapshot(ctx context.Context, resources map[resource.Type]
 	snapshot, err := cache.NewSnapshot(ds.newVersion(), resources)
 
 	if err != nil {
-		slog.LogAttrs(ctx, slog.LevelError, "Failed to create snapshot", slog.Any("error", err))
+		slog.LogAttrs(ctx, slog.LevelError, "failed to create snapshot", slog.Any("error", err))
 		return false
 	}
 
 	err = ds.clusterCache.SetSnapshot(ctx, ds.nodeID, snapshot)
 
 	if err != nil {
-		slog.LogAttrs(ctx, slog.LevelError, "Failed to set snapshot", slog.Any("error", err))
+		slog.LogAttrs(ctx, slog.LevelError, "failed to set snapshot", slog.Any("error", err))
 		return false
 	}
 
@@ -114,7 +119,7 @@ func (ds *Service) init(ctx context.Context) {
 	containers, err := ds.agent.ContainerList(ctx, &protoAgent.ContainerListRequest{})
 
 	if err != nil {
-		slog.LogAttrs(ctx, slog.LevelError, "Failed to list containers", slog.Any("error", err))
+		slog.LogAttrs(ctx, slog.LevelError, "failed to list containers", slog.Any("error", err))
 		return
 	}
 
@@ -175,7 +180,7 @@ func (ds *Service) addCluster(container *protoAgent.ContainerInfo) {
 		return
 	}
 
-	slog.LogAttrs(context.Background(), slog.LevelInfo, "Add Cluster", slog.String("container_id", container.GetId()))
+	slog.LogAttrs(context.Background(), slog.LevelInfo, "add Cluster", slog.String("container_id", container.GetId()))
 
 	ds.containers[container.GetId()] = clusterName
 
@@ -367,7 +372,12 @@ func (ds *Service) eventListener(ctx context.Context) {
 	stream, err := ds.agent.Direct.ContainerListener(ctx, &protoAgent.ContainerListenerRequest{})
 
 	if err != nil {
-		slog.LogAttrs(ctx, slog.LevelError, "Failed to listen for container events", slog.String("error", "stream is nil"))
+		slog.LogAttrs(
+			ctx,
+			slog.LevelError,
+			"failed to listen for container events",
+			slog.Any("error", err),
+		)
 		return
 	}
 
@@ -375,7 +385,7 @@ func (ds *Service) eventListener(ctx context.Context) {
 		event, err := stream.Recv()
 
 		if err != nil {
-			slog.LogAttrs(ctx, slog.LevelWarn, "Failed to listen for container events", slog.Any("error", err))
+			slog.LogAttrs(ctx, slog.LevelWarn, "failed to listen for container events", slog.Any("error", err))
 			continue
 		}
 
@@ -385,7 +395,7 @@ func (ds *Service) eventListener(ctx context.Context) {
 			containersList, err := ds.agent.Direct.ContainerList(ctx, containerListRequest)
 
 			if err != nil {
-				slog.LogAttrs(ctx, slog.LevelWarn, "Failed to get container labels", slog.Any("error", err))
+				slog.LogAttrs(ctx, slog.LevelWarn, "failed to get container labels", slog.Any("error", err))
 				continue
 			}
 
@@ -409,12 +419,11 @@ func (ds *Service) eventListener(ctx context.Context) {
 }
 
 func (ds *Service) newVersion() string {
-	uuidv7, err := uuid.NewV7()
-
-	if err != nil {
-		// @TODO a l'init pas grave, pas de collision possible, au runtime collision possible si c'est fréquent
-		uuidv7 = uuid.UUID{}
+	if ds.versionCounter > math.MaxInt64-1 {
+		ds.versionCounter = 0
 	}
 
-	return time.Now().Format(time.RFC3339Nano) + " " + uuidv7.String()
+	v := atomic.AddInt64(&ds.versionCounter, 1)
+
+	return time.Now().Format(time.RFC3339Nano) + "-" + fmt.Sprintf("%d", v)
 }
