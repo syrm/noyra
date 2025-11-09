@@ -79,13 +79,13 @@ func (d *Deployment) WriteTo(ctx context.Context, etcdClient *etcd.Client, key s
 func (d *Deployment) ReadInto(ctx context.Context, etcdClient *etcd.Client, key string) error {
 	valueBase64, err := etcdClient.Get(ctx, key)
 	if err != nil {
-		slog.LogAttrs(ctx, slog.LevelError, "Error while getting value from etcd", slog.Any("error", err))
+		slog.LogAttrs(ctx, slog.LevelError, "error while getting value from etcd", slog.Any("error", err))
 		return err
 	}
 
 	value, err := base64.StdEncoding.DecodeString(valueBase64)
 	if err != nil {
-		slog.LogAttrs(ctx, slog.LevelError, "Error while decoding base64 value", slog.Any("error", err))
+		slog.LogAttrs(ctx, slog.LevelError, "error while decoding base64 value", slog.Any("error", err))
 		return err
 	}
 	buf := bytes.NewReader(value)
@@ -126,7 +126,7 @@ func (d *Deployment) ReadInto(ctx context.Context, etcdClient *etcd.Client, key 
 func (d *Deployment) ReadFromValue(ctx context.Context, valueBase64 string) error {
 	value, err := base64.StdEncoding.DecodeString(valueBase64)
 	if err != nil {
-		slog.LogAttrs(ctx, slog.LevelError, "Error while decoding base64 value", slog.Any("error", err))
+		slog.LogAttrs(ctx, slog.LevelError, "error while decoding base64 value", slog.Any("error", err))
 		return err
 	}
 
@@ -229,19 +229,19 @@ func (s *Supervisor) Run(ctx context.Context) {
 	err := s.loadConfig(os.Getenv("NOYRA_CONFIG"))
 
 	if err != nil {
-		slog.LogAttrs(ctx, slog.LevelError, "Error in configuration", slog.Any("error", err))
+		slog.LogAttrs(ctx, slog.LevelError, "error in configuration", slog.Any("error", err))
 		os.Exit(1)
 	}
 
-	slog.LogAttrs(ctx, slog.LevelInfo, "Supervisor starting")
+	slog.LogAttrs(ctx, slog.LevelInfo, "supervisor starting")
 	s.generateCertificat()
 	s.initEtcd(ctx)
 	// @TODO attention etcd n'a pas encore été démarré
 	s.saveClusterState(ctx)
-	slog.LogAttrs(ctx, slog.LevelInfo, "Deploying toc toc", slog.Int("services", len(s.config.Deployment)))
+	slog.LogAttrs(ctx, slog.LevelInfo, "deploying toc toc", slog.Int("services", len(s.config.Deployment)))
 
 	for _, service := range s.config.Deployment {
-		slog.LogAttrs(ctx, slog.LevelInfo, "Deploying service", slog.String("service", service.Name))
+		slog.LogAttrs(ctx, slog.LevelInfo, "deploying service", slog.String("service", service.Name))
 		s.deployService(ctx, service)
 	}
 
@@ -252,7 +252,7 @@ func (s *Supervisor) saveClusterState(ctx context.Context) {
 	containerLists, err := s.agentService.Direct.ContainerList(ctx, &protoAgent.ContainerListRequest{})
 
 	if err != nil {
-		slog.LogAttrs(ctx, slog.LevelError, "Error while calling ContainerList", slog.Any("error", err))
+		slog.LogAttrs(ctx, slog.LevelError, "error while calling ContainerList", slog.Any("error", err))
 	}
 
 	for _, deploymentConfig := range s.config.Deployment {
@@ -277,14 +277,14 @@ func (s *Supervisor) saveClusterState(ctx context.Context) {
 
 		err := deployment.WriteTo(ctx, s.etcdClient, "/deployment/"+deployment.Name)
 		if err != nil {
-			slog.LogAttrs(ctx, slog.LevelError, "Error while writing to etcd", slog.Any("error", err))
+			slog.LogAttrs(ctx, slog.LevelError, "error while writing to etcd", slog.Any("error", err))
 		}
 	}
 
 	d := Deployment{}
 	errRead := d.ReadInto(ctx, s.etcdClient, "/deployment/smallapp")
 	if errRead != nil {
-		slog.LogAttrs(ctx, slog.LevelError, "Error while reading deployment", slog.Any("error", errRead))
+		slog.LogAttrs(ctx, slog.LevelError, "error while reading deployment", slog.Any("error", errRead))
 		return
 	}
 	fmt.Printf("Deployment: %+v\n", d)
@@ -294,13 +294,13 @@ func (s *Supervisor) observeCluster(ctx context.Context) {
 	stream, err := s.agentService.Direct.ContainerListener(ctx, &protoAgent.ContainerListenerRequest{})
 
 	if err != nil {
-		slog.LogAttrs(ctx, slog.LevelError, "Error while calling ContainerListener", slog.Any("error", err))
+		slog.LogAttrs(ctx, slog.LevelError, "error while calling ContainerListener", slog.Any("error", err))
 		os.Exit(1)
 	}
 
 	for {
 		feature, _ := stream.Recv()
-		slog.LogAttrs(ctx, slog.LevelInfo, "Container event received", slog.Any("feature", feature))
+		slog.LogAttrs(ctx, slog.LevelInfo, "container event received", slog.Any("feature", feature))
 	}
 }
 
@@ -316,14 +316,14 @@ func (s *Supervisor) deployService(ctx context.Context, deploymentConfig Deploym
 	containersList, err := s.agentService.Direct.ContainerList(ctx, containerListRequest)
 
 	if err != nil {
-		slog.LogAttrs(ctx, slog.LevelError, "Failed to get containers", slog.Any("error", err))
+		slog.LogAttrs(ctx, slog.LevelError, "failed to get containers", slog.Any("error", err))
 		return
 	}
 
 	containerToDeploy := max(deploymentConfig.Replicas-len(containersList.GetContainers()), 0)
 
 	if containerToDeploy == 0 {
-		slog.LogAttrs(ctx, slog.LevelInfo, "No new container to deploy for service", slog.String("service", deploymentConfig.Name))
+		slog.LogAttrs(ctx, slog.LevelInfo, "no new container to deploy for service", slog.String("service", deploymentConfig.Name))
 		return
 	}
 
@@ -342,7 +342,7 @@ func (s *Supervisor) deployService(ctx context.Context, deploymentConfig Deploym
 	}
 
 	for range containerToDeploy {
-		slog.LogAttrs(ctx, slog.LevelInfo, "Starting to deploy container", slog.Any("name", deploymentConfig.Name))
+		slog.LogAttrs(ctx, slog.LevelInfo, "starting to deploy container", slog.Any("name", deploymentConfig.Name))
 
 		containerStartRequest := &protoAgent.ContainerStartRequest{}
 		containerStartRequest.SetImage(deploymentConfig.Image)
@@ -359,7 +359,7 @@ func (s *Supervisor) deployService(ctx context.Context, deploymentConfig Deploym
 
 		_, err := s.agentService.Direct.ContainerStart(ctx, containerStartRequest)
 		if err != nil {
-			slog.LogAttrs(ctx, slog.LevelError, "Failed to start container", slog.Any("error", err))
+			slog.LogAttrs(ctx, slog.LevelError, "failed to start container", slog.Any("error", err))
 		}
 	}
 }
@@ -369,7 +369,7 @@ func (s *Supervisor) generateCertificat() {
 	_, errKey := os.Stat("certs/etcd-ca.key")
 
 	if errCrt == nil && errKey == nil {
-		slog.LogAttrs(context.Background(), slog.LevelInfo, "Certificat existant trouvé")
+		slog.LogAttrs(context.Background(), slog.LevelInfo, "certificat existant trouvé")
 		return
 	}
 
@@ -491,7 +491,7 @@ func (s *Supervisor) initEtcd(ctx context.Context) {
 	containersList, err := s.agentService.Direct.ContainerList(ctx, containerListRequest)
 
 	if len(containersList.GetContainers()) > 0 {
-		slog.LogAttrs(ctx, slog.LevelInfo, "Noyra Etcd already running")
+		slog.LogAttrs(ctx, slog.LevelInfo, "noyra Etcd already running")
 		return
 	}
 
@@ -548,10 +548,10 @@ func (s *Supervisor) initEtcd(ctx context.Context) {
 	defer cancel()
 	r, err := s.agentService.Direct.ContainerStart(timeoutCtx, startRequest)
 	if err != nil {
-		slog.LogAttrs(ctx, slog.LevelError, "Could not start container", slog.Any("error", err))
+		slog.LogAttrs(ctx, slog.LevelError, "could not start container", slog.Any("error", err))
 		os.Exit(1)
 	}
-	slog.LogAttrs(ctx, slog.LevelInfo, "Container start response", slog.String("status", r.GetStatus()))
+	slog.LogAttrs(ctx, slog.LevelInfo, "container start response", slog.String("status", r.GetStatus()))
 }
 
 var rng = rand.New(rand.NewSource(time.Now().UnixNano()))
@@ -565,10 +565,10 @@ const (
 
 func ContainerNameHash() string {
 	b := make([]byte, 5)
-
 	mutex.Lock()
+	defer mutex.Unlock()
+
 	randomInt63 := rng.Int63()
-	mutex.Unlock()
 
 	for i := range 5 {
 		idx := randomInt63 & 0b111111

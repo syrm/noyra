@@ -5,7 +5,7 @@ import (
 	_ "embed"
 	"log/slog"
 	"os"
-	"time"
+	"os/signal"
 
 	"github.com/containers/podman/v5/pkg/bindings"
 	gopsAgent "github.com/google/gops/agent"
@@ -19,6 +19,10 @@ import (
 )
 
 func main() {
+	ctx := context.Background()
+	ctx, cancel := signal.NotifyContext(ctx, os.Interrupt)
+	defer cancel()
+
 	go func() {
 		err := gopsAgent.Listen(gopsAgent.Options{Addr: "0.0.0.0:50000"})
 		if err != nil {
@@ -47,11 +51,9 @@ func main() {
 		os.Exit(1)
 	}
 
-	ctx := context.Background()
-
 	podmanConnection, err := bindings.NewConnection(ctx, os.Getenv("PODMAN_HOST"))
 	if err != nil {
-		slog.LogAttrs(ctx, slog.LevelError, "Error connecting to Podman",
+		slog.LogAttrs(ctx, slog.LevelError, "error connecting to Podman",
 			slog.Any("error", err))
 		os.Exit(1)
 	}
@@ -72,7 +74,7 @@ func main() {
 	etcdClient, errEtcd := etcd.BuildEtcdClient(ctx, os.Getenv("ETCD_CA_CERT"), os.Getenv("ETCD_CLIENT_CERT"), os.Getenv("ETCD_CLIENT_KEY"))
 
 	if errEtcd != nil {
-		slog.LogAttrs(ctx, slog.LevelError, "Error connecting to etcd", slog.Any("error", errEtcd))
+		slog.LogAttrs(ctx, slog.LevelError, "error connecting to etcd", slog.Any("error", errEtcd))
 		os.Exit(1)
 	}
 
@@ -84,7 +86,5 @@ func main() {
 	apiServer := api.BuildAPIServer(etcdClient)
 	go apiServer.Run(ctx)
 
-	for {
-		time.Sleep(1 * time.Second)
-	}
+	<-ctx.Done()
 }
