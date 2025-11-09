@@ -1,0 +1,14 @@
+[env]
+PODMAN_HOST = { required = "Set PODMAN_HOST to the value of command: podman system info --format 'unix://{{.Host.RemoteSocket.Path}}'" }
+NOYRA_CONFIG = { required = true }
+ETCD_CA_CERT = { required = true }
+ETCD_CA_KEY = { required = true }
+ETCD_SERVER_CERT = { required = true }
+ETCD_SERVER_KEY = { required = true }
+ETCD_CLIENT_CERT = { required = true }
+ETCD_CLIENT_KEY = { required = true }
+_.file = ".env"
+
+[tasks]
+generate="go generate ./..."
+lint="go run github.com/bufbuild/buf/cmd/buf@v1.58.0 lint"

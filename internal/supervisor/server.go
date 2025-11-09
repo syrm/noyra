@@ -3,19 +3,11 @@ package supervisor
 import (
 	"bytes"
 	"context"
-	cryptoRand "crypto/rand"
-	"crypto/rsa"
-	"crypto/x509"
-	"crypto/x509/pkix"
 	"encoding/base64"
 	"encoding/binary"
-	"encoding/pem"
 	"fmt"
-	"log"
 	"log/slog"
-	"math/big"
 	"math/rand"
-	"net"
 	"os"
 	"strconv"
 	"strings"
@@ -234,7 +226,6 @@ func (s *Supervisor) Run(ctx context.Context) {
 	}
 
 	slog.LogAttrs(ctx, slog.LevelInfo, "supervisor starting")
-	s.generateCertificat()
 	s.initEtcd(ctx)
 	// @TODO attention etcd n'a pas encore été démarré
 	s.saveClusterState(ctx)
@@ -364,123 +355,6 @@ func (s *Supervisor) deployService(ctx context.Context, deploymentConfig Deploym
 	}
 }
 
-func (s *Supervisor) generateCertificat() {
-	_, errCrt := os.Stat("certs/etcd-ca.crt")
-	_, errKey := os.Stat("certs/etcd-ca.key")
-
-	if errCrt == nil && errKey == nil {
-		slog.LogAttrs(context.Background(), slog.LevelInfo, "certificat existant trouvé")
-		return
-	}
-
-	// Générer une nouvelle autorité de certification (CA) ou réutiliser l'existante
-	// Pour cet exemple, nous générons une nouvelle CA
-	ca := &x509.Certificate{
-		SerialNumber: big.NewInt(1654),
-		Subject: pkix.Name{
-			Organization: []string{"Blackprism Noyra"},
-			CommonName:   "Noyra etcd",
-		},
-		NotBefore:             time.Now(),
-		NotAfter:              time.Now().AddDate(10, 0, 0),
-		IsCA:                  true,
-		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth},
-		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
-		BasicConstraintsValid: true,
-	}
-
-	caPrivKey, err := rsa.GenerateKey(cryptoRand.Reader, 4096)
-	if err != nil {
-		//log.Fatalf("Erreur: %v", err)
-	}
-
-	caBytes, err := x509.CreateCertificate(cryptoRand.Reader, ca, ca, &caPrivKey.PublicKey, caPrivKey)
-	if err != nil {
-		log.Fatalf("Erreur: %v", err)
-	}
-
-	caPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caBytes})
-	caPrivKeyPEM := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(caPrivKey)})
-
-	if errCa := os.WriteFile("certs/etcd-ca.crt", caPEM, 0644); err != nil {
-		log.Fatal(errCa)
-	}
-	if errCaPriv := os.WriteFile("certs/etcd-ca.key", caPrivKeyPEM, 0600); err != nil {
-		log.Fatal(errCaPriv)
-	}
-
-	// Générer un nouveau certificat serveur
-	serverCert := &x509.Certificate{
-		SerialNumber: big.NewInt(1659),
-		Subject: pkix.Name{
-			Organization: []string{"Blackprism Noyra"},
-			CommonName:   "localhost",
-		},
-		DNSNames:    []string{"localhost", "etcd"},
-		IPAddresses: []net.IP{net.ParseIP("127.0.0.1")},
-		NotBefore:   time.Now(),
-		NotAfter:    time.Now().AddDate(10, 0, 0),
-		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth},
-		KeyUsage:    x509.KeyUsageDigitalSignature,
-	}
-
-	serverPrivKey, err := rsa.GenerateKey(cryptoRand.Reader, 4096)
-	if err != nil {
-		// log.Fatalf("Erreur: %v", err)
-	}
-
-	serverBytes, err := x509.CreateCertificate(cryptoRand.Reader, serverCert, ca, &serverPrivKey.PublicKey, caPrivKey)
-	if err != nil {
-		// log.Fatalf("Erreur: %v", err)
-	}
-
-	serverPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: serverBytes})
-	serverPrivKeyPEM := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(serverPrivKey)})
-
-	if errCrt := os.WriteFile("certs/etcd-server.crt", serverPEM, 0644); err != nil {
-		log.Fatal(errCrt)
-	}
-
-	if errPriv := os.WriteFile("certs/etcd-server.key", serverPrivKeyPEM, 0600); err != nil {
-		log.Fatal(errPriv)
-	}
-
-	// Générer un nouveau certificat client
-	clientCert := &x509.Certificate{
-		SerialNumber: big.NewInt(1660),
-		Subject: pkix.Name{
-			Organization: []string{"Blackprism Noyra"},
-			CommonName:   "client",
-		},
-		NotBefore:   time.Now(),
-		NotAfter:    time.Now().AddDate(10, 0, 0),
-		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
-		KeyUsage:    x509.KeyUsageDigitalSignature,
-	}
-
-	clientPrivKey, err := rsa.GenerateKey(cryptoRand.Reader, 4096)
-	if err != nil {
-		// log.Fatalf("Erreur: %v", err)
-	}
-
-	clientBytes, err := x509.CreateCertificate(cryptoRand.Reader, clientCert, ca, &clientPrivKey.PublicKey, caPrivKey)
-	if err != nil {
-		// log.Fatalf("Erreur: %v", err)
-	}
-
-	clientPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: clientBytes})
-	clientPrivKeyPEM := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(clientPrivKey)})
-
-	if err := os.WriteFile("certs/etcd-client.crt", clientPEM, 0644); err != nil {
-		// log.Fatal(err)
-	}
-	if err := os.WriteFile("certs/etcd-client.key", clientPrivKeyPEM, 0600); err != nil {
-		// log.Fatal(err)
-	}
-
-	// log.Println("Nouveaux certificats générés avec succès")
-}
-
 func (s *Supervisor) initEtcd(ctx context.Context) {
 	containerListRequest := &protoAgent.ContainerListRequest{}
 	containerListRequest.SetLabels(
@@ -495,12 +369,28 @@ func (s *Supervisor) initEtcd(ctx context.Context) {
 		return
 	}
 
-	certPath := "/mnt/data/src/go/noyra/certs"
-	containerMount := &protoAgent.ContainerMount{}
-	containerMount.SetDestination("/certs")
-	containerMount.SetType("bind")
-	containerMount.SetSource(certPath)
-	containerMount.SetOptions([]string{"rbind", "ro"})
+	var mounts []*protoAgent.ContainerMount
+
+	containerMountEtcdCa := &protoAgent.ContainerMount{}
+	containerMountEtcdCa.SetDestination("/certs/etcd-ca.crt")
+	containerMountEtcdCa.SetType("bind")
+	containerMountEtcdCa.SetSource(s.etcdClient.GetCaCertFile())
+	containerMountEtcdCa.SetOptions([]string{"rbind", "ro"})
+	mounts = append(mounts, containerMountEtcdCa)
+
+	containerMountEtcdServerCert := &protoAgent.ContainerMount{}
+	containerMountEtcdServerCert.SetDestination("/certs/etcd-server.crt")
+	containerMountEtcdServerCert.SetType("bind")
+	containerMountEtcdServerCert.SetSource(s.etcdClient.GetServerCertFile())
+	containerMountEtcdServerCert.SetOptions([]string{"rbind", "ro"})
+	mounts = append(mounts, containerMountEtcdServerCert)
+
+	containerMountEtcdServerKey := &protoAgent.ContainerMount{}
+	containerMountEtcdServerKey.SetDestination("/certs/etcd-server.key")
+	containerMountEtcdServerKey.SetType("bind")
+	containerMountEtcdServerKey.SetSource(s.etcdClient.GetServerKeyFile())
+	containerMountEtcdServerKey.SetOptions([]string{"rbind", "ro"})
+	mounts = append(mounts, containerMountEtcdServerKey)
 
 	containerVolume := &protoAgent.ContainerVolume{}
 	containerVolume.SetDestination("/bitnami/etcd/data")
@@ -539,7 +429,7 @@ func (s *Supervisor) initEtcd(ctx context.Context) {
 			"noyra.name": "noyra-etcd",
 		},
 	)
-	startRequest.SetMounts([]*protoAgent.ContainerMount{containerMount})
+	startRequest.SetMounts(mounts)
 	startRequest.SetVolumes([]*protoAgent.ContainerVolume{containerVolume})
 	startRequest.SetPortMappings([]*protoAgent.ContainerPortMapping{containerPortMapping})
 

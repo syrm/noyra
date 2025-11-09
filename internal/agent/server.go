@@ -22,8 +22,8 @@ import (
 	"github.com/containers/podman/v5/pkg/specgen"
 	"github.com/fullstorydev/grpchan/inprocgrpc"
 	spec "github.com/opencontainers/runtime-spec/specs-go"
-	"google.golang.org/grpc"
 	"github.com/samber/oops"
+	"google.golang.org/grpc"
 )
 
 const (
@@ -261,8 +261,6 @@ func (s *Server) ContainerStart(ctx context.Context, startRequest *protoAgent.Co
 		protoAgentResponse.SetStatus("KO")
 		return protoAgentResponse, errStart
 	}
-
-	protoAgentResponse.SetStatus("OK")
 
 	protoAgentResponse.SetStatus("OK")
 
@@ -568,7 +566,7 @@ func (s *Server) initNoyra(ctx context.Context) int {
 	containerPortMapping2.SetHostPort(19001)
 
 	startRequest := &protoAgent.ContainerStartRequest{}
-	startRequest.SetImage("envoyproxy/envoy:protoAgent.33.0")
+	startRequest.SetImage("envoyproxy/envoy:distroless-v1.33-latest")
 	startRequest.SetName("noyra-envoy")
 	startRequest.SetCommand([]string{"-c", "/config.yaml", "--drain-time-s", "5"})
 	startRequest.SetExposedPorts(map[uint32]string{
