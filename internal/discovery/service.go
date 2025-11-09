@@ -51,15 +51,17 @@ type Service struct {
 	resources      map[string]map[resource.Type][]types.Resource
 	containers     map[string]string
 	versionCounter int64
+	logger         *slog.Logger
 }
 
-func BuildDiscoveryService(ctx context.Context, nodeID string, agent *agent.Agent) *Service {
+func BuildDiscoveryService(ctx context.Context, nodeID string, agent *agent.Agent, logger *slog.Logger) *Service {
 	ds := &Service{
 		clusterCache: cache.NewSnapshotCache(false, cache.IDHash{}, nil),
 		nodeID:       nodeID,
 		agent:        agent,
 		resources:    make(map[string]map[resource.Type][]types.Resource),
 		containers:   make(map[string]string),
+		logger:       logger,
 	}
 
 	// @TODO est ce que le ctx a une utilité ici ?
@@ -72,7 +74,7 @@ func (ds *Service) Run(ctx context.Context) {
 	grpcServer := grpc.NewServer(grpc.MaxConcurrentStreams(grpcMaxConcurrentStreams))
 	lis, err := net.Listen("tcp", ":18000")
 	if err != nil {
-		slog.LogAttrs(ctx, slog.LevelError, "failed to listen",
+		ds.logger.LogAttrs(ctx, slog.LevelError, "failed to listen",
 			slog.Any("error", err))
 		os.Exit(1)
 	}
@@ -86,11 +88,11 @@ func (ds *Service) Run(ctx context.Context) {
 
 	go ds.eventListener(ctx)
 
-	slog.LogAttrs(ctx, slog.LevelInfo, "EDS server started",
+	ds.logger.LogAttrs(ctx, slog.LevelInfo, "EDS server started",
 		slog.Int("port", 18000))
 
 	if err := grpcServer.Serve(lis); err != nil {
-		slog.LogAttrs(
+		ds.logger.LogAttrs(
 			ctx, slog.LevelError, "error starting server",
 			slog.Any("error", err),
 		)
@@ -102,14 +104,14 @@ func (ds *Service) SetSnapshot(ctx context.Context, resources map[resource.Type]
 	snapshot, err := cache.NewSnapshot(ds.newVersion(), resources)
 
 	if err != nil {
-		slog.LogAttrs(ctx, slog.LevelError, "failed to create snapshot", slog.Any("error", err))
+		ds.logger.LogAttrs(ctx, slog.LevelError, "failed to create snapshot", slog.Any("error", err))
 		return false
 	}
 
 	err = ds.clusterCache.SetSnapshot(ctx, ds.nodeID, snapshot)
 
 	if err != nil {
-		slog.LogAttrs(ctx, slog.LevelError, "failed to set snapshot", slog.Any("error", err))
+		ds.logger.LogAttrs(ctx, slog.LevelError, "failed to set snapshot", slog.Any("error", err))
 		return false
 	}
 
@@ -120,7 +122,7 @@ func (ds *Service) init(ctx context.Context) {
 	containers, err := ds.agent.ContainerList(ctx, nil, nil)
 
 	if err != nil {
-		slog.LogAttrs(ctx, slog.LevelError, "failed to list containers", slog.Any("error", err))
+		ds.logger.LogAttrs(ctx, slog.LevelError, "failed to list containers", slog.Any("error", err))
 		return
 	}
 
@@ -181,7 +183,7 @@ func (ds *Service) addCluster(container component.Container) {
 		return
 	}
 
-	slog.LogAttrs(context.Background(), slog.LevelInfo, "add Cluster", slog.String("container_id", container.ID))
+	ds.logger.LogAttrs(context.Background(), slog.LevelInfo, "add Cluster", slog.String("container_id", container.ID))
 
 	ds.containers[container.ID] = clusterName
 
@@ -374,7 +376,7 @@ func (ds *Service) eventListener(ctx context.Context) error {
 	err := ds.agent.ContainerListener(ctx, containerListenerResponseChan)
 
 	if err != nil {
-		slog.LogAttrs(ctx, slog.LevelError, "failed to listen for container events", slog.Any("error", err))
+		ds.logger.LogAttrs(ctx, slog.LevelError, "failed to listen for container events", slog.Any("error", err))
 		return oops.Wrapf(err, "failed to listen for container events")
 	}
 
@@ -386,7 +388,7 @@ func (ds *Service) eventListener(ctx context.Context) error {
 				containersList, errList := ds.agent.ContainerList(ctx, containersID, nil)
 
 				if errList != nil {
-					slog.LogAttrs(ctx, slog.LevelWarn, "failed to get container labels", slog.Any("error", errList))
+					ds.logger.LogAttrs(ctx, slog.LevelWarn, "failed to get container labels", slog.Any("error", errList))
 					continue
 				}
 
@@ -401,7 +403,7 @@ func (ds *Service) eventListener(ctx context.Context) error {
 			}
 
 			if event.Action == "died" || event.Action == "stop" {
-				slog.LogAttrs(ctx, slog.LevelInfo, "DS Service Event received", slog.String("event", event.Action))
+				ds.logger.LogAttrs(ctx, slog.LevelInfo, "DS Service Event received", slog.String("event", event.Action))
 
 				ds.removeCluster(event.ID)
 				ds.SetSnapshot(ctx, ds.getResourcesForSnapshot())

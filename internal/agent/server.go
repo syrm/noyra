@@ -40,13 +40,14 @@ type Server struct {
 	podmanContext context.Context
 	serverMux     *http.ServeMux
 	GrpcServer    *grpc.Server
-	Direct        protoAgent.AgentServiceClient
+	logger        *slog.Logger
 }
 
-func BuildServer(podmanContext context.Context) *Server {
+func BuildServer(podmanContext context.Context, logger *slog.Logger) *Server {
 	a := &Server{
 		podmanContext: podmanContext,
 		serverMux:     http.NewServeMux(),
+		logger:        logger,
 	}
 
 	channel := &inprocgrpc.Channel{}
@@ -54,8 +55,6 @@ func BuildServer(podmanContext context.Context) *Server {
 
 	//protoAgent.RegisterAgentServiceServer(a.GrpcServer, a)
 	channel.RegisterService(&protoAgent.AgentService_ServiceDesc, a)
-
-	a.Direct = protoAgent.NewAgentServiceClient(channel)
 
 	return a
 }
@@ -81,14 +80,14 @@ func (s *Server) Run(ctx context.Context) int {
 	listenAgent, err := net.Listen("tcp", ":4646")
 
 	if err != nil {
-		slog.LogAttrs(ctx, slog.LevelError, "failed to listen for agent service", slog.Any("error", err))
+		s.logger.LogAttrs(ctx, slog.LevelError, "failed to listen for agent service", slog.Any("error", err))
 		return 1
 	}
 
-	slog.LogAttrs(ctx, slog.LevelInfo, "server service listening", slog.Any("address", listenAgent.Addr()))
+	s.logger.LogAttrs(ctx, slog.LevelInfo, "server service listening", slog.Any("address", listenAgent.Addr()))
 
 	if err := s.GrpcServer.Serve(listenAgent); err != nil {
-		slog.LogAttrs(ctx, slog.LevelError, "server service failed", slog.Any("error", err))
+		s.logger.LogAttrs(ctx, slog.LevelError, "server service failed", slog.Any("error", err))
 		return 1
 	}
 
@@ -107,7 +106,7 @@ func (s *Server) ListContainer(ctx context.Context, filters map[string]map[strin
 
 	podmanContainers, err := containers.List(s.podmanContext, &containers.ListOptions{Filters: podmanFilters})
 	if err != nil {
-		slog.LogAttrs(ctx, slog.LevelError, "error listing containers", slog.Any("error", err))
+		s.logger.LogAttrs(ctx, slog.LevelError, "error listing containers", slog.Any("error", err))
 		return nil
 	}
 
@@ -172,7 +171,7 @@ func (s *Server) ContainerStart(ctx context.Context, startRequest *protoAgent.Co
 	}
 
 	mounts := make([]spec.Mount, 0, len(startRequest.GetMounts()))
-	slog.LogAttrs(ctx, slog.LevelDebug, "initializing mounts", slog.Any("mounts", mounts))
+	s.logger.LogAttrs(ctx, slog.LevelDebug, "initializing mounts", slog.Any("mounts", mounts))
 	for _, m := range startRequest.GetMounts() {
 		mounts = append(mounts, spec.Mount{
 			Destination: m.GetDestination(),
@@ -254,7 +253,7 @@ func (s *Server) ContainerStart(ctx context.Context, startRequest *protoAgent.Co
 	}
 
 	containerID := response.ID
-	slog.LogAttrs(ctx, slog.LevelInfo, "container created", slog.String("id", containerID))
+	s.logger.LogAttrs(ctx, slog.LevelInfo, "container created", slog.String("id", containerID))
 
 	errStart := containers.Start(s.podmanContext, containerID, &containers.StartOptions{})
 	if errStart != nil {
@@ -271,7 +270,7 @@ func (s *Server) createNetwork(ctx context.Context) error {
 	networkExists := false
 	networks, errList := network.List(s.podmanContext, &network.ListOptions{Filters: map[string][]string{"name": {"noyra"}}})
 	if errList != nil {
-		slog.LogAttrs(ctx, slog.LevelError, "error checking networks", slog.Any("error", errList))
+		s.logger.LogAttrs(ctx, slog.LevelError, "error checking networks", slog.Any("error", errList))
 		return fmt.Errorf("error checking networks: %w", errList)
 	}
 
@@ -279,7 +278,7 @@ func (s *Server) createNetwork(ctx context.Context) error {
 		noyraNetwork := networks[0]
 		networkExists = true
 		if noyraNetwork.Driver != "bridge" {
-			slog.LogAttrs(
+			s.logger.LogAttrs(
 				ctx,
 				slog.LevelWarn,
 				"network noyra exists but is not configured in bridge mode",
@@ -310,11 +309,11 @@ func (s *Server) createNetwork(ctx context.Context) error {
 		})
 
 		if err != nil {
-			slog.LogAttrs(ctx, slog.LevelError, "error creating noyra network", slog.Any("error", err))
+			s.logger.LogAttrs(ctx, slog.LevelError, "error creating noyra network", slog.Any("error", err))
 			return fmt.Errorf("error creating noyra network: %w", err)
 		}
 
-		slog.LogAttrs(ctx, slog.LevelInfo, "noyra network created successfully", slog.Any("network", networkCreate))
+		s.logger.LogAttrs(ctx, slog.LevelInfo, "noyra network created successfully", slog.Any("network", networkCreate))
 	}
 
 	return nil
@@ -330,7 +329,7 @@ func (s *Server) ContainerStop(ctx context.Context, stopRequest *protoAgent.Cont
 	protoAgentResponse := &protoAgent.ContainerStopResponse{}
 
 	if err != nil {
-		slog.LogAttrs(
+		s.logger.LogAttrs(
 			ctx,
 			slog.LevelError, "error stopping container",
 			slog.String("containerId", containerID),
@@ -340,7 +339,7 @@ func (s *Server) ContainerStop(ctx context.Context, stopRequest *protoAgent.Cont
 		return protoAgentResponse, err
 	}
 
-	slog.LogAttrs(ctx, slog.LevelInfo, "container stopped successfully", slog.String("containerId", containerID))
+	s.logger.LogAttrs(ctx, slog.LevelInfo, "container stopped successfully", slog.String("containerId", containerID))
 	protoAgentResponse.SetStatus("OK")
 	return protoAgentResponse, nil
 }
@@ -359,14 +358,14 @@ func (s *Server) ContainerRemove(ctx context.Context, removeRequest *protoAgent.
 	protoAgentResponse := &protoAgent.ContainerRemoveResponse{}
 
 	if err != nil {
-		slog.LogAttrs(ctx, slog.LevelError, "Error removing container",
+		s.logger.LogAttrs(ctx, slog.LevelError, "Error removing container",
 			slog.String("containerId", containerID),
 			slog.Any("error", err))
 		protoAgentResponse.SetStatus("KO")
 		return protoAgentResponse, err
 	}
 
-	slog.LogAttrs(
+	s.logger.LogAttrs(
 		ctx,
 		slog.LevelInfo,
 		"container removed successfully",
@@ -395,7 +394,7 @@ func (s *Server) ContainerList(ctx context.Context, listRequest *protoAgent.Cont
 
 	podmanContainers, err := containers.List(s.podmanContext, &containers.ListOptions{Filters: filters})
 	if err != nil {
-		slog.LogAttrs(
+		s.logger.LogAttrs(
 			ctx,
 			slog.LevelError,
 			"error listing containers",
@@ -454,7 +453,7 @@ func (s *Server) ContainerListener(in *protoAgent.ContainerListenerRequest, stre
 	go func() {
 		err := system.Events(s.podmanContext, eventChannel, nil, options)
 		if err != nil {
-			slog.LogAttrs(stream.Context(), slog.LevelError, "error setting up events listener", slog.Any("error", err))
+			s.logger.LogAttrs(stream.Context(), slog.LevelError, "error setting up events listener", slog.Any("error", err))
 		}
 	}()
 
@@ -467,7 +466,7 @@ func (s *Server) ContainerListener(in *protoAgent.ContainerListenerRequest, stre
 				containerEvent.SetAction(event.Status)
 
 				if err := stream.Send(containerEvent); err != nil {
-					slog.LogAttrs(stream.Context(), slog.LevelError, "error sending container event",
+					s.logger.LogAttrs(stream.Context(), slog.LevelError, "error sending container event",
 						slog.Any("error", err),
 						slog.String("containerId", event.Actor.ID),
 						slog.String("action", event.Status),
@@ -477,13 +476,13 @@ func (s *Server) ContainerListener(in *protoAgent.ContainerListenerRequest, stre
 
 				switch event.Status {
 				case "create":
-					slog.LogAttrs(stream.Context(), slog.LevelInfo, "container created", slog.String("containerId", event.Actor.ID))
+					s.logger.LogAttrs(stream.Context(), slog.LevelInfo, "container created", slog.String("containerId", event.Actor.ID))
 				case "start":
-					slog.LogAttrs(stream.Context(), slog.LevelInfo, "container started", slog.String("containerId", event.Actor.ID))
+					s.logger.LogAttrs(stream.Context(), slog.LevelInfo, "container started", slog.String("containerId", event.Actor.ID))
 				case "stop":
-					slog.LogAttrs(stream.Context(), slog.LevelInfo, "container stopped", slog.String("containerId", event.Actor.ID))
+					s.logger.LogAttrs(stream.Context(), slog.LevelInfo, "container stopped", slog.String("containerId", event.Actor.ID))
 				case "die":
-					slog.LogAttrs(stream.Context(), slog.LevelInfo, "container died", slog.String("containerId", event.Actor.ID))
+					s.logger.LogAttrs(stream.Context(), slog.LevelInfo, "container died", slog.String("containerId", event.Actor.ID))
 				}
 			}
 		case <-stream.Context().Done():
@@ -498,12 +497,12 @@ func (s *Server) pullImage(ctx context.Context, startRequest *protoAgent.Contain
 	}})
 
 	if errList != nil {
-		slog.LogAttrs(ctx, slog.LevelError, "error listing image", slog.Any("error", errList))
+		s.logger.LogAttrs(ctx, slog.LevelError, "error listing image", slog.Any("error", errList))
 		return oops.Wrapf(errList, "error listing image")
 	}
 
 	if len(imagesList) > 0 {
-		slog.LogAttrs(ctx, slog.LevelInfo, "image already present", slog.String("image", startRequest.GetImage()))
+		s.logger.LogAttrs(ctx, slog.LevelInfo, "image already present", slog.String("image", startRequest.GetImage()))
 		return nil
 	}
 
@@ -511,7 +510,7 @@ func (s *Server) pullImage(ctx context.Context, startRequest *protoAgent.Contain
 	_, err := images.Pull(s.podmanContext, startRequest.GetImage(), &images.PullOptions{Quiet: &quiet})
 
 	if err != nil {
-		slog.LogAttrs(
+		s.logger.LogAttrs(
 			ctx,
 			slog.LevelError,
 			"error pulling image",
@@ -540,12 +539,12 @@ func (s *Server) initNoyra(ctx context.Context) int {
 	containersList := s.ListContainer(ctx, filters)
 
 	// if err != nil {
-	// 	slog.LogAttrs(ctx, slog.LevelError, "Error listing containers",
+	// 	s.logger.LogAttrs(ctx, slog.LevelError, "Error listing containers",
 	// 		slog.Any("error", err))
 	// }
 
 	if len(containersList) > 0 {
-		slog.LogAttrs(ctx, slog.LevelInfo, "noyra Envoy already running")
+		s.logger.LogAttrs(ctx, slog.LevelInfo, "noyra Envoy already running")
 		return 0
 	}
 
@@ -585,13 +584,15 @@ func (s *Server) initNoyra(ctx context.Context) int {
 	// Contact the server and print out its response.
 	timeoutCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
-	r, err := s.Direct.ContainerStart(timeoutCtx, startRequest)
+
+	// @TODO passer par s.agent
+	r, err := s.ContainerStart(timeoutCtx, startRequest)
 	if err != nil {
-		slog.LogAttrs(ctx, slog.LevelError, "could not start container", slog.Any("error", err))
+		s.logger.LogAttrs(ctx, slog.LevelError, "could not start container", slog.Any("error", err))
 		return 1
 	}
 
-	slog.LogAttrs(ctx, slog.LevelInfo, "container start response", slog.String("status", r.GetStatus()))
+	s.logger.LogAttrs(ctx, slog.LevelInfo, "container start response", slog.String("status", r.GetStatus()))
 
 	return 0
 }

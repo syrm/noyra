@@ -39,27 +39,26 @@ func main() {
 			return a
 		},
 	}))
-	slog.SetDefault(logger)
 
 	if os.Getenv("PODMAN_HOST") == "" {
-		slog.LogAttrs(context.Background(), slog.LevelError, "PODMAN_HOST env var is not set")
+		logger.LogAttrs(context.Background(), slog.LevelError, "PODMAN_HOST env var is not set")
 		os.Exit(1)
 	}
 
 	if os.Getenv("NOYRA_CONFIG") == "" {
-		slog.LogAttrs(context.Background(), slog.LevelError, "NOYRA_CONFIG env var is not set")
+		logger.LogAttrs(context.Background(), slog.LevelError, "NOYRA_CONFIG env var is not set")
 		os.Exit(1)
 	}
 
 	podmanConnection, err := bindings.NewConnection(ctx, os.Getenv("PODMAN_HOST"))
 	if err != nil {
-		slog.LogAttrs(ctx, slog.LevelError, "error connecting to Podman",
+		logger.LogAttrs(ctx, slog.LevelError, "error connecting to Podman",
 			slog.Any("error", err))
 		os.Exit(1)
 	}
 
-	agentService := agent.BuildAgent(podmanConnection)
-	ds := discovery.BuildDiscoveryService(ctx, "noyra-id", agentService)
+	agentService := agent.BuildAgent(podmanConnection, logger)
+	ds := discovery.BuildDiscoveryService(ctx, "noyra-id", agentService, logger)
 	go ds.Run(ctx)
 
 	// for {
@@ -74,19 +73,20 @@ func main() {
 		os.Getenv("ETCD_SERVER_KEY"),
 		os.Getenv("ETCD_CLIENT_CERT"),
 		os.Getenv("ETCD_CLIENT_KEY"),
+		logger,
 	)
 
 	if errEtcd != nil {
-		slog.LogAttrs(ctx, slog.LevelError, "error connecting to etcd", slog.Any("error", errEtcd))
+		logger.LogAttrs(ctx, slog.LevelError, "error connecting to etcd", slog.Any("error", errEtcd))
 		os.Exit(1)
 	}
 
-	supervisorServer := supervisor.BuildSupervisor(agentService, etcdClient, config.Schema)
+	supervisorServer := supervisor.BuildSupervisor(agentService, etcdClient, config.Schema, logger)
 
 	go supervisorServer.Run(ctx)
 
 	// Initialize and start the Client server
-	apiServer := api.BuildAPIServer(etcdClient)
+	apiServer := api.BuildAPIServer(etcdClient, logger)
 	go apiServer.Run(ctx)
 
 	<-ctx.Done()

@@ -43,6 +43,7 @@ type Deployment struct {
 	Domains []string         `json:"domains"`
 	Expose  []string         `json:"expose"`
 	Status  DeploymentStatus `json:"status"`
+	logger  *slog.Logger
 }
 
 type DeploymentStatus struct {
@@ -68,16 +69,16 @@ func (d *Deployment) WriteTo(ctx context.Context, etcdClient *etcd.Client, key s
 	return etcdClient.Put(ctx, key, base64.StdEncoding.EncodeToString(buf.Bytes()))
 }
 
-func (d *Deployment) ReadInto(ctx context.Context, etcdClient *etcd.Client, key string) error {
+func (d *Deployment) ReadInto(ctx context.Context, etcdClient *etcd.Client, key string, logger *slog.Logger) error {
 	valueBase64, err := etcdClient.Get(ctx, key)
 	if err != nil {
-		slog.LogAttrs(ctx, slog.LevelError, "error while getting value from etcd", slog.Any("error", err))
+		logger.LogAttrs(ctx, slog.LevelError, "error while getting value from etcd", slog.Any("error", err))
 		return err
 	}
 
 	value, err := base64.StdEncoding.DecodeString(valueBase64)
 	if err != nil {
-		slog.LogAttrs(ctx, slog.LevelError, "error while decoding base64 value", slog.Any("error", err))
+		logger.LogAttrs(ctx, slog.LevelError, "error while decoding base64 value", slog.Any("error", err))
 		return err
 	}
 	buf := bytes.NewReader(value)
@@ -115,10 +116,10 @@ func (d *Deployment) ReadInto(ctx context.Context, etcdClient *etcd.Client, key 
 }
 
 // ReadFromValue reads a deployment from a base64-encoded value
-func (d *Deployment) ReadFromValue(ctx context.Context, valueBase64 string) error {
+func (d *Deployment) ReadFromValue(ctx context.Context, valueBase64 string, logger *slog.Logger) error {
 	value, err := base64.StdEncoding.DecodeString(valueBase64)
 	if err != nil {
-		slog.LogAttrs(ctx, slog.LevelError, "error while decoding base64 value", slog.Any("error", err))
+		logger.LogAttrs(ctx, slog.LevelError, "error while decoding base64 value", slog.Any("error", err))
 		return err
 	}
 
@@ -163,13 +164,15 @@ type Supervisor struct {
 	etcdClient   *etcd.Client
 	config       *Config
 	schema       []byte
+	logger       *slog.Logger
 }
 
-func BuildSupervisor(agentService *agent.Agent, etcdClient *etcd.Client, schema []byte) *Supervisor {
+func BuildSupervisor(agentService *agent.Agent, etcdClient *etcd.Client, schema []byte, logger *slog.Logger) *Supervisor {
 	return &Supervisor{
 		agentService: agentService,
 		etcdClient:   etcdClient,
 		schema:       schema,
+		logger:       logger,
 	}
 }
 
@@ -221,18 +224,18 @@ func (s *Supervisor) Run(ctx context.Context) {
 	err := s.loadConfig(os.Getenv("NOYRA_CONFIG"))
 
 	if err != nil {
-		slog.LogAttrs(ctx, slog.LevelError, "error in configuration", slog.Any("error", err))
+		s.logger.LogAttrs(ctx, slog.LevelError, "error in configuration", slog.Any("error", err))
 		os.Exit(1)
 	}
 
-	slog.LogAttrs(ctx, slog.LevelInfo, "supervisor starting")
+	s.logger.LogAttrs(ctx, slog.LevelInfo, "supervisor starting")
 	s.initEtcd(ctx)
 	// @TODO attention etcd n'a pas encore été démarré
 	s.saveClusterState(ctx)
-	slog.LogAttrs(ctx, slog.LevelInfo, "deploying toc toc", slog.Int("services", len(s.config.Deployment)))
+	s.logger.LogAttrs(ctx, slog.LevelInfo, "deploying toc toc", slog.Int("services", len(s.config.Deployment)))
 
 	for _, service := range s.config.Deployment {
-		slog.LogAttrs(ctx, slog.LevelInfo, "deploying service", slog.String("service", service.Name))
+		s.logger.LogAttrs(ctx, slog.LevelInfo, "deploying service", slog.String("service", service.Name))
 		s.deployService(ctx, service)
 	}
 
@@ -243,7 +246,7 @@ func (s *Supervisor) saveClusterState(ctx context.Context) {
 	containerLists, err := s.agentService.ContainerList(ctx, nil, nil)
 
 	if err != nil {
-		slog.LogAttrs(ctx, slog.LevelError, "error while calling ContainerList", slog.Any("error", err))
+		s.logger.LogAttrs(ctx, slog.LevelError, "error while calling ContainerList", slog.Any("error", err))
 	}
 
 	for _, deploymentConfig := range s.config.Deployment {
@@ -268,14 +271,14 @@ func (s *Supervisor) saveClusterState(ctx context.Context) {
 
 		err := deployment.WriteTo(ctx, s.etcdClient, "/deployment/"+deployment.Name)
 		if err != nil {
-			slog.LogAttrs(ctx, slog.LevelError, "error while writing to etcd", slog.Any("error", err))
+			s.logger.LogAttrs(ctx, slog.LevelError, "error while writing to etcd", slog.Any("error", err))
 		}
 	}
 
 	d := Deployment{}
-	errRead := d.ReadInto(ctx, s.etcdClient, "/deployment/smallapp")
+	errRead := d.ReadInto(ctx, s.etcdClient, "/deployment/smallapp", s.logger)
 	if errRead != nil {
-		slog.LogAttrs(ctx, slog.LevelError, "error while reading deployment", slog.Any("error", errRead))
+		s.logger.LogAttrs(ctx, slog.LevelError, "error while reading deployment", slog.Any("error", errRead))
 		return
 	}
 	fmt.Printf("Deployment: %+v\n", d)
@@ -286,14 +289,14 @@ func (s *Supervisor) observeCluster(ctx context.Context) error {
 	err := s.agentService.ContainerListener(ctx, containerListenerResponseChan)
 
 	if err != nil {
-		slog.LogAttrs(ctx, slog.LevelError, "error while calling ContainerListener", slog.Any("error", err))
+		s.logger.LogAttrs(ctx, slog.LevelError, "error while calling ContainerListener", slog.Any("error", err))
 		os.Exit(1)
 	}
 
 	for {
 		select {
 		case event := <-containerListenerResponseChan:
-			slog.LogAttrs(ctx, slog.LevelInfo, "container event received", slog.Any("event", event))
+			s.logger.LogAttrs(ctx, slog.LevelInfo, "container event received", slog.Any("event", event))
 
 		case <-ctx.Done():
 			return ctx.Err()
@@ -309,14 +312,14 @@ func (s *Supervisor) deployService(ctx context.Context, deploymentConfig Deploym
 	)
 
 	if err != nil {
-		slog.LogAttrs(ctx, slog.LevelError, "failed to get containers", slog.Any("error", err))
+		s.logger.LogAttrs(ctx, slog.LevelError, "failed to get containers", slog.Any("error", err))
 		return
 	}
 
 	containerToDeploy := max(deploymentConfig.Replicas-len(containersList), 0)
 
 	if containerToDeploy == 0 {
-		slog.LogAttrs(ctx, slog.LevelInfo, "no new container to deploy for service", slog.String("service", deploymentConfig.Name))
+		s.logger.LogAttrs(ctx, slog.LevelInfo, "no new container to deploy for service", slog.String("service", deploymentConfig.Name))
 		return
 	}
 
@@ -335,7 +338,7 @@ func (s *Supervisor) deployService(ctx context.Context, deploymentConfig Deploym
 	}
 
 	for range containerToDeploy {
-		slog.LogAttrs(ctx, slog.LevelInfo, "starting to deploy container", slog.Any("name", deploymentConfig.Name))
+		s.logger.LogAttrs(ctx, slog.LevelInfo, "starting to deploy container", slog.Any("name", deploymentConfig.Name))
 
 		containerStartRequest := component.ContainerRequest{
 			Image:        deploymentConfig.Image,
@@ -351,7 +354,7 @@ func (s *Supervisor) deployService(ctx context.Context, deploymentConfig Deploym
 
 		_, errContainerStart := s.agentService.ContainerStart(ctx, containerStartRequest)
 		if errContainerStart != nil {
-			slog.LogAttrs(ctx, slog.LevelError, "failed to start container", slog.Any("error", errContainerStart))
+			s.logger.LogAttrs(ctx, slog.LevelError, "failed to start container", slog.Any("error", errContainerStart))
 		}
 	}
 }
@@ -360,7 +363,7 @@ func (s *Supervisor) initEtcd(ctx context.Context) {
 	containersList, err := s.agentService.ContainerList(ctx, nil, map[string]string{"noyra.name": "noyra-etcd"})
 
 	if len(containersList) > 0 {
-		slog.LogAttrs(ctx, slog.LevelInfo, "noyra Etcd already running")
+		s.logger.LogAttrs(ctx, slog.LevelInfo, "noyra Etcd already running")
 		return
 	}
 
@@ -433,10 +436,10 @@ func (s *Supervisor) initEtcd(ctx context.Context) {
 	defer cancel()
 	r, err := s.agentService.ContainerStart(timeoutCtx, startRequest)
 	if err != nil {
-		slog.LogAttrs(ctx, slog.LevelError, "could not start container", slog.Any("error", err))
+		s.logger.LogAttrs(ctx, slog.LevelError, "could not start container", slog.Any("error", err))
 		os.Exit(1)
 	}
-	slog.LogAttrs(ctx, slog.LevelInfo, "container start response", slog.String("status", r.GetStatus()))
+	s.logger.LogAttrs(ctx, slog.LevelInfo, "container start response", slog.String("status", r.GetStatus()))
 }
 
 var rng = rand.New(rand.NewSource(time.Now().UnixNano()))
