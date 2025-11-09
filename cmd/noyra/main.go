@@ -71,7 +71,15 @@ func main() {
 	// 	time.Sleep(1 * time.Second)
 	// }
 
-	etcdClient, errEtcd := etcd.BuildEtcdClient(ctx, os.Getenv("ETCD_CA_CERT"), os.Getenv("ETCD_CLIENT_CERT"), os.Getenv("ETCD_CLIENT_KEY"))
+	etcdClient, errEtcd := etcd.BuildEtcdClient(
+		ctx,
+		os.Getenv("ETCD_CA_CERT"),
+		os.Getenv("ETCD_CA_KEY"),
+		os.Getenv("ETCD_SERVER_CERT"),
+		os.Getenv("ETCD_SERVER_KEY"),
+		os.Getenv("ETCD_CLIENT_CERT"),
+		os.Getenv("ETCD_CLIENT_KEY"),
+	)
 
 	if errEtcd != nil {
 		slog.LogAttrs(ctx, slog.LevelError, "error connecting to etcd", slog.Any("error", errEtcd))
