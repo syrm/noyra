@@ -349,7 +349,7 @@ func (s *Supervisor) deployService(ctx context.Context, deploymentConfig Deploym
 			},
 		}
 
-		_, errContainerStart := s.agentService.ContainerStart(ctx, containerStartRequest)
+		errContainerStart := s.agentService.ContainerStart(ctx, containerStartRequest)
 		if errContainerStart != nil {
 			slog.LogAttrs(ctx, slog.LevelError, "failed to start container", slog.Any("error", errContainerStart))
 		}
@@ -358,6 +358,10 @@ func (s *Supervisor) deployService(ctx context.Context, deploymentConfig Deploym
 
 func (s *Supervisor) initEtcd(ctx context.Context) {
 	containersList, err := s.agentService.ContainerList(ctx, nil, map[string]string{"noyra.name": "noyra-etcd"})
+
+	if err != nil {
+		slog.LogAttrs(ctx, slog.LevelError, "failed to get container", slog.Any("error", err))
+	}
 
 	if len(containersList) > 0 {
 		slog.LogAttrs(ctx, slog.LevelInfo, "noyra Etcd already running")
@@ -431,12 +435,12 @@ func (s *Supervisor) initEtcd(ctx context.Context) {
 	// Contact the server and print out its response.
 	timeoutCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
-	r, err := s.agentService.ContainerStart(timeoutCtx, startRequest)
-	if err != nil {
-		slog.LogAttrs(ctx, slog.LevelError, "could not start container", slog.Any("error", err))
+	errContainerStart := s.agentService.ContainerStart(timeoutCtx, startRequest)
+	if errContainerStart != nil {
+		slog.LogAttrs(ctx, slog.LevelError, "could not start container", slog.Any("error", errContainerStart))
 		os.Exit(1)
 	}
-	slog.LogAttrs(ctx, slog.LevelInfo, "container start response", slog.String("status", r.GetStatus()))
+	slog.LogAttrs(ctx, slog.LevelInfo, "container start response")
 }
 
 var rng = rand.New(rand.NewSource(time.Now().UnixNano()))
