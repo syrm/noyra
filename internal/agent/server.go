@@ -31,14 +31,14 @@ type Server struct {
 	agent      Agent
 	serverMux  *http.ServeMux
 	GrpcServer *grpc.Server
-  logger     *slog.Logger
+	logger     *slog.Logger
 }
 
 func BuildServer(podmanContext context.Context, agent Agent, logger *slog.Logger) *Server {
 	a := &Server{
 		agent:     agent,
 		serverMux: http.NewServeMux(),
-    logger: logger,
+		logger:    logger,
 	}
 
 	channel := &inprocgrpc.Channel{}
@@ -189,7 +189,6 @@ func (s *Server) ContainerRemove(
 		slog.LevelInfo,
 		"container removed successfully",
 		slog.String("containerId", containerID),
-		slog.Any("response", response),
 	)
 	protoAgentResponse.SetStatus("OK")
 	return protoAgentResponse, nil
