@@ -207,6 +207,8 @@ func (s *Server) ContainerList(
 			ctx,
 			slog.LevelError,
 			"error listing containers",
+			slog.Any("containersID", listRequest.GetContainersId()),
+			slog.Any("labels", listRequest.GetLabels()),
 			slog.Any("error", err),
 		)
 		protoAgentResponse.SetStatus("KO")
