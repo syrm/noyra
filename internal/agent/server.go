@@ -31,12 +31,14 @@ type Server struct {
 	agent      Agent
 	serverMux  *http.ServeMux
 	GrpcServer *grpc.Server
+	logger     *slog.Logger
 }
 
-func BuildServer(podmanContext context.Context, agent Agent) *Server {
+func BuildServer(podmanContext context.Context, agent Agent, logger *slog.Logger) *Server {
 	a := &Server{
 		agent:     agent,
 		serverMux: http.NewServeMux(),
+		logger:    logger,
 	}
 
 	channel := &inprocgrpc.Channel{}
@@ -69,14 +71,14 @@ func (s *Server) Run(ctx context.Context) int {
 	listenAgent, err := net.Listen("tcp", ":4646")
 
 	if err != nil {
-		slog.LogAttrs(ctx, slog.LevelError, "failed to listen for agent service", slog.Any("error", err))
+		s.logger.LogAttrs(ctx, slog.LevelError, "failed to listen for agent service", slog.Any("error", err))
 		return 1
 	}
 
-	slog.LogAttrs(ctx, slog.LevelInfo, "server service listening", slog.Any("address", listenAgent.Addr()))
+	s.logger.LogAttrs(ctx, slog.LevelInfo, "server service listening", slog.Any("address", listenAgent.Addr()))
 
 	if err := s.GrpcServer.Serve(listenAgent); err != nil {
-		slog.LogAttrs(ctx, slog.LevelError, "server service failed", slog.Any("error", err))
+		s.logger.LogAttrs(ctx, slog.LevelError, "server service failed", slog.Any("error", err))
 		return 1
 	}
 
@@ -150,7 +152,7 @@ func (s *Server) ContainerStop(
 	protoAgentResponse := &protoAgent.ContainerStopResponse{}
 
 	if err != nil {
-		slog.LogAttrs(
+		s.logger.LogAttrs(
 			ctx,
 			slog.LevelError, "error stopping container",
 			slog.String("containerId", containerID),
@@ -160,7 +162,7 @@ func (s *Server) ContainerStop(
 		return protoAgentResponse, err
 	}
 
-	slog.LogAttrs(ctx, slog.LevelInfo, "container stopped successfully", slog.String("containerId", containerID))
+	s.logger.LogAttrs(ctx, slog.LevelInfo, "container stopped successfully", slog.String("containerId", containerID))
 	protoAgentResponse.SetStatus("OK")
 	return protoAgentResponse, nil
 }
@@ -175,14 +177,19 @@ func (s *Server) ContainerRemove(
 	protoAgentResponse := &protoAgent.ContainerRemoveResponse{}
 
 	if err != nil {
-		slog.LogAttrs(ctx, slog.LevelError, "error removing container",
+		s.logger.LogAttrs(ctx, slog.LevelError, "error removing container",
 			slog.String("containerId", containerID),
 			slog.Any("error", err))
 		protoAgentResponse.SetStatus("KO")
 		return protoAgentResponse, err
 	}
 
-	slog.LogAttrs(ctx, slog.LevelInfo, "container removed successfully", slog.String("containerId", containerID))
+	s.logger.LogAttrs(
+		ctx,
+		slog.LevelInfo,
+		"container removed successfully",
+		slog.String("containerId", containerID),
+	)
 	protoAgentResponse.SetStatus("OK")
 	return protoAgentResponse, nil
 }
@@ -196,10 +203,14 @@ func (s *Server) ContainerList(
 	protoAgentResponse := &protoAgent.ContainerListResponse{}
 
 	if err != nil {
-		slog.LogAttrs(ctx, slog.LevelError, "error listing containers",
+		s.logger.LogAttrs(
+			ctx,
+			slog.LevelError,
+			"error listing containers",
 			slog.Any("containersID", listRequest.GetContainersId()),
 			slog.Any("labels", listRequest.GetLabels()),
-			slog.Any("error", err))
+			slog.Any("error", err),
+		)
 		protoAgentResponse.SetStatus("KO")
 		return protoAgentResponse, err
 	}
@@ -255,7 +266,7 @@ func (s *Server) ContainerListener(in *protoAgent.ContainerListenerRequest, stre
 	go func() {
 		err := s.agent.ContainerListener(stream.Context(), containerListenerResponseChan)
 		if err != nil {
-			slog.LogAttrs(stream.Context(), slog.LevelError, "error setting up events listener", slog.Any("error", err))
+			s.logger.LogAttrs(stream.Context(), slog.LevelError, "error setting up events listener", slog.Any("error", err))
 		}
 	}()
 

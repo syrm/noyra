@@ -26,6 +26,7 @@ type Client struct {
 	caCertFile     string
 	serverCertFile string
 	serverKeyFile  string
+	logger         *slog.Logger
 }
 
 func BuildEtcdClient(
@@ -36,12 +37,13 @@ func BuildEtcdClient(
 	serverKeyFile string,
 	clientCertFile string,
 	clientKeyFile string,
+	logger *slog.Logger,
 ) (*Client, error) {
-	generateCertificat(caCertFile, caKeyFile, serverCertFile, serverKeyFile, clientCertFile, clientKeyFile)
+	generateCertificat(caCertFile, caKeyFile, serverCertFile, serverKeyFile, clientCertFile, clientKeyFile, logger)
 
 	caCert, err := os.ReadFile(caCertFile)
 	if err != nil {
-		slog.LogAttrs(ctx, slog.LevelError, "error loading CA certificate", slog.Any("error", err))
+		logger.LogAttrs(ctx, slog.LevelError, "error loading CA certificate", slog.Any("error", err))
 		return nil, err
 	}
 
@@ -50,7 +52,7 @@ func BuildEtcdClient(
 
 	cert, err := tls.LoadX509KeyPair(clientCertFile, clientKeyFile)
 	if err != nil {
-		slog.LogAttrs(ctx, slog.LevelError, "error loading client certificate", slog.Any("error", err))
+		logger.LogAttrs(ctx, slog.LevelError, "error loading client certificate", slog.Any("error", err))
 		return nil, err
 	}
 
@@ -66,7 +68,7 @@ func BuildEtcdClient(
 	})
 
 	if err != nil {
-		slog.LogAttrs(ctx, slog.LevelError, "error connecting to etcd", slog.Any("error", err))
+		logger.LogAttrs(ctx, slog.LevelError, "error connecting to etcd", slog.Any("error", err))
 		return nil, err
 	}
 
@@ -78,7 +80,7 @@ func BuildEtcdClient(
 func (e *Client) Write(ctx context.Context, key, value string) error {
 	_, err := e.client.Put(ctx, key, value)
 	if err != nil {
-		slog.LogAttrs(ctx, slog.LevelError, "error writing to etcd", slog.Any("error", err))
+		e.logger.LogAttrs(ctx, slog.LevelError, "error writing to etcd", slog.Any("error", err))
 		return err
 	}
 	return nil
@@ -87,7 +89,7 @@ func (e *Client) Write(ctx context.Context, key, value string) error {
 func (e *Client) Put(ctx context.Context, key, value string) error {
 	_, err := e.client.Put(ctx, key, value)
 	if err != nil {
-		slog.LogAttrs(ctx, slog.LevelError, "error putting value in etcd", slog.Any("error", err))
+		e.logger.LogAttrs(ctx, slog.LevelError, "error putting value in etcd", slog.Any("error", err))
 		return err
 	}
 	return nil
@@ -96,7 +98,7 @@ func (e *Client) Put(ctx context.Context, key, value string) error {
 func (e *Client) Get(ctx context.Context, key string) (string, error) {
 	resp, err := e.client.Get(ctx, key)
 	if err != nil {
-		slog.LogAttrs(ctx, slog.LevelError, "error getting value from etcd", slog.Any("error", err))
+		e.logger.LogAttrs(ctx, slog.LevelError, "error getting value from etcd", slog.Any("error", err))
 		return "", err
 	}
 
@@ -110,7 +112,7 @@ func (e *Client) Get(ctx context.Context, key string) (string, error) {
 func (e *Client) GetWithPrefix(ctx context.Context, prefix string) (map[string]string, error) {
 	resp, err := e.client.Get(ctx, prefix, clientv3.WithPrefix())
 	if err != nil {
-		slog.LogAttrs(ctx, slog.LevelError, "error getting values with prefix from etcd", slog.Any("error", err))
+		e.logger.LogAttrs(ctx, slog.LevelError, "error getting values with prefix from etcd", slog.Any("error", err))
 		return nil, err
 	}
 
@@ -141,12 +143,13 @@ func generateCertificat(
 	serverKeyFile string,
 	clientCertFile string,
 	clientKeyFile string,
+	logger *slog.Logger,
 ) {
 	_, errCrt := os.Stat(caCertFile)
 	_, errKey := os.Stat(caKeyFile)
 
 	if errCrt == nil && errKey == nil {
-		slog.LogAttrs(context.Background(), slog.LevelInfo, "certificat not found")
+		logger.LogAttrs(context.Background(), slog.LevelInfo, "certificat not found")
 		return
 	}
 

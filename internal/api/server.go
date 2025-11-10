@@ -14,12 +14,14 @@ import (
 
 type Server struct {
 	etcdClient *etcd.Client
+	logger     *slog.Logger
 }
 
 // BuildAPIServer creates a new Client server
-func BuildAPIServer(etcdClient *etcd.Client) *Server {
+func BuildAPIServer(etcdClient *etcd.Client, logger *slog.Logger) *Server {
 	return &Server{
 		etcdClient: etcdClient,
+		logger:     logger,
 	}
 }
 
@@ -27,9 +29,9 @@ func BuildAPIServer(etcdClient *etcd.Client) *Server {
 func (a *Server) Run(ctx context.Context) {
 	http.HandleFunc("/deployments", a.handleDeployments)
 
-	slog.LogAttrs(ctx, slog.LevelInfo, "client server started", slog.Int("port", 8080))
+	a.logger.LogAttrs(ctx, slog.LevelInfo, "client server started", slog.Int("port", 8080))
 	if err := http.ListenAndServe("0.0.0.0:8080", nil); err != nil {
-		slog.LogAttrs(ctx, slog.LevelError, "error starting Client server", slog.Any("error", err))
+		a.logger.LogAttrs(ctx, slog.LevelError, "error starting Client server", slog.Any("error", err))
 	}
 }
 
@@ -42,7 +44,7 @@ func (a *Server) handleDeployments(w http.ResponseWriter, r *http.Request) {
 	// Get all deployments from etcd
 	deployments, err := a.etcdClient.GetWithPrefix(ctxWithTimeout, "/deployment/")
 	if err != nil {
-		slog.LogAttrs(ctx, slog.LevelError, "error getting deployments from etcd", slog.Any("error", err))
+		a.logger.LogAttrs(ctx, slog.LevelError, "error getting deployments from etcd", slog.Any("error", err))
 		http.Error(w, "Error getting deployments", http.StatusInternalServerError)
 		return
 	}
@@ -55,7 +57,7 @@ func (a *Server) handleDeployments(w http.ResponseWriter, r *http.Request) {
 
 		// Decode deployment from etcd
 		deployment := supervisor.Deployment{}
-		deployment.ReadFromValue(ctx, value)
+		deployment.ReadFromValue(ctx, value, a.logger)
 
 		result[name] = deployment
 	}
@@ -65,7 +67,7 @@ func (a *Server) handleDeployments(w http.ResponseWriter, r *http.Request) {
 
 	// Encode result as JSON and write to response
 	if err := json.NewEncoder(w).Encode(result); err != nil {
-		slog.LogAttrs(ctx, slog.LevelError, "error encoding deployments as JSON", slog.Any("error", err))
+		a.logger.LogAttrs(ctx, slog.LevelError, "error encoding deployments as JSON", slog.Any("error", err))
 		http.Error(w, "Error encoding deployments", http.StatusInternalServerError)
 		return
 	}

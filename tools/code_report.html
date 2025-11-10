@@ -305,7 +305,7 @@
                 <div class="code-example">
 // Current problematic code
 if err != nil {
-    slog.LogAttrs(ctx, slog.LevelError, "Error pulling image",
+    logger.LogAttrs(ctx, slog.LevelError, "Error pulling image",
         slog.String("image", startRequest.GetImage()),
         slog.Any("error", err))
     panic(err.Error())
@@ -313,7 +313,7 @@ if err != nil {
 
 // Better approach
 if err != nil {
-    slog.LogAttrs(ctx, slog.LevelError, "Error pulling image",
+    logger.LogAttrs(ctx, slog.LevelError, "Error pulling image",
         slog.String("image", startRequest.GetImage()),
         slog.Any("error", err))
     return &protoAgent.Response{Status: "KO"}, fmt.Errorf("failed to pull image: %w", err)
