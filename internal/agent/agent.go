@@ -43,7 +43,7 @@ func (a *Agent) ListContainer(ctx context.Context, filters map[string]map[string
 	for filterKey, filterValue := range filters {
 		podmanFilters[filterKey] = make([]string, 0, len(filterValue))
 		for k, v := range filterValue {
-			podmanFilters[filterKey] = append(podmanFilters[filterKey], fmt.Sprintf("%a=%a", k, v))
+			podmanFilters[filterKey] = append(podmanFilters[filterKey], fmt.Sprintf("%s=%s", k, v))
 		}
 	}
 
@@ -86,6 +86,18 @@ func (a *Agent) ListContainer(ctx context.Context, filters map[string]map[string
 	}
 
 	return containersList
+}
+
+func (a *Agent) ContainerResume(ctx context.Context, containerIDorName string) error {
+
+	errStart := containers.Start(a.podmanContext, containerIDorName, &containers.StartOptions{})
+	if errStart != nil {
+		return errStart
+	}
+
+	a.logger.LogAttrs(ctx, slog.LevelInfo, "container resumed", slog.String("id", containerIDorName))
+
+	return nil
 }
 
 func (a *Agent) ContainerStart(ctx context.Context, containerRequest component.ContainerRequest) error {
@@ -307,6 +319,7 @@ func (a *Agent) ContainerRemove(ctx context.Context, containerIDorName string) e
 
 func (a *Agent) ContainerList(
 	ctx context.Context,
+	all bool,
 	containersID []string,
 	labels map[string]string,
 ) (map[string]component.Container, error) {
@@ -325,7 +338,7 @@ func (a *Agent) ContainerList(
 		filters["label"] = filtersLabels
 	}
 
-	podmanContainers, err := containers.List(a.podmanContext, &containers.ListOptions{Filters: filters})
+	podmanContainers, err := containers.List(a.podmanContext, &containers.ListOptions{All: &all, Filters: filters})
 	if err != nil {
 		a.logger.LogAttrs(
 			ctx,

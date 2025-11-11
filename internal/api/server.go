@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/samber/oops"
+
 	"blackprism.org/noyra/internal/etcd"
 	"blackprism.org/noyra/internal/supervisor"
 )
@@ -26,13 +28,41 @@ func BuildAPIServer(etcdClient *etcd.Client, logger *slog.Logger) *Server {
 }
 
 // Run starts the Client server
-func (a *Server) Run(ctx context.Context) {
-	http.HandleFunc("/deployments", a.handleDeployments)
+func (a *Server) Run(ctx context.Context) error {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/deployments", a.handleDeployments)
 
-	a.logger.LogAttrs(ctx, slog.LevelInfo, "client server started", slog.Int("port", 8080))
-	if err := http.ListenAndServe("0.0.0.0:8080", nil); err != nil {
-		a.logger.LogAttrs(ctx, slog.LevelError, "error starting Client server", slog.Any("error", err))
+	server := http.Server{
+		Addr:    "0.0.0.0:8080",
+		Handler: mux,
 	}
+
+	errChan := make(chan error)
+
+	go func() {
+		a.logger.LogAttrs(ctx, slog.LevelInfo, "client server started", slog.Int("port", 8080))
+		if err := server.ListenAndServe(); err != nil {
+			a.logger.LogAttrs(ctx, slog.LevelError, "error starting Client server", slog.Any("error", err))
+			errChan <- err
+		}
+	}()
+
+	var err error
+
+	select {
+	case <-ctx.Done():
+		return closeAPIService(ctx, &server, err)
+	case err = <-errChan:
+		return closeAPIService(ctx, &server, err)
+	}
+}
+
+func closeAPIService(ctx context.Context, server *http.Server, parentErr error) error {
+	errServer := server.Shutdown(ctx)
+	if errServer != nil {
+		return oops.Wrapf(oops.Join(parentErr, errServer), "error shutdown api server")
+	}
+	return parentErr
 }
 
 // handleDeployments handles the /deployments endpoint

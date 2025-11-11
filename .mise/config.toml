@@ -12,3 +12,7 @@ _.file = ".env"
 [tasks]
 generate="go generate ./..."
 lint="go run github.com/bufbuild/buf/cmd/buf@v1.58.0 lint"
+
+[tools]
+"node" = "22"
+"npm:@musistudio/claude-code-router" = "latest"

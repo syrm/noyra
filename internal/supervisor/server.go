@@ -17,6 +17,7 @@ import (
 	"cuelang.org/go/cue"
 	"cuelang.org/go/cue/cuecontext"
 	"cuelang.org/go/cue/load"
+	"github.com/samber/oops"
 
 	"blackprism.org/noyra/internal/agent"
 	"blackprism.org/noyra/internal/agent/component"
@@ -220,16 +221,21 @@ func (s *Supervisor) loadConfig(configDir string) error {
 	return nil
 }
 
-func (s *Supervisor) Run(ctx context.Context) {
+func (s *Supervisor) Run(ctx context.Context) error {
 	err := s.loadConfig(os.Getenv("NOYRA_CONFIG"))
 
 	if err != nil {
 		s.logger.LogAttrs(ctx, slog.LevelError, "error in configuration", slog.Any("error", err))
-		os.Exit(1)
+		return err
 	}
 
 	s.logger.LogAttrs(ctx, slog.LevelInfo, "supervisor starting")
-	s.initEtcd(ctx)
+	errEtcd := s.startEtcd(ctx)
+
+	if errEtcd != nil {
+		return oops.Wrapf(errEtcd, "supervisor can't start etcd")
+	}
+
 	// @TODO attention etcd n'a pas encore été démarré
 	s.saveClusterState(ctx)
 	s.logger.LogAttrs(ctx, slog.LevelInfo, "deploying toc toc", slog.Int("services", len(s.config.Deployment)))
@@ -240,10 +246,12 @@ func (s *Supervisor) Run(ctx context.Context) {
 	}
 
 	s.observeCluster(ctx)
+
+	return nil
 }
 
 func (s *Supervisor) saveClusterState(ctx context.Context) {
-	containerLists, err := s.agentService.ContainerList(ctx, nil, nil)
+	containerLists, err := s.agentService.ContainerList(ctx, false, nil, nil)
 
 	if err != nil {
 		s.logger.LogAttrs(ctx, slog.LevelError, "error while calling ContainerList", slog.Any("error", err))
@@ -290,7 +298,7 @@ func (s *Supervisor) observeCluster(ctx context.Context) error {
 
 	if err != nil {
 		s.logger.LogAttrs(ctx, slog.LevelError, "error while calling ContainerListener", slog.Any("error", err))
-		os.Exit(1)
+		return err
 	}
 
 	for {
@@ -307,6 +315,7 @@ func (s *Supervisor) observeCluster(ctx context.Context) error {
 func (s *Supervisor) deployService(ctx context.Context, deploymentConfig DeploymentConfig) {
 	containersList, err := s.agentService.ContainerList(
 		ctx,
+		false,
 		nil,
 		map[string]string{"noyra.name": deploymentConfig.Name},
 	)
@@ -359,16 +368,34 @@ func (s *Supervisor) deployService(ctx context.Context, deploymentConfig Deploym
 	}
 }
 
-func (s *Supervisor) initEtcd(ctx context.Context) {
-	containersList, err := s.agentService.ContainerList(ctx, nil, map[string]string{"noyra.name": "noyra-etcd"})
+func (s *Supervisor) startEtcd(ctx context.Context) error {
+	containersList, err := s.agentService.ContainerList(ctx, true, nil, map[string]string{"noyra.name": "noyra-etcd"})
 
 	if err != nil {
 		slog.LogAttrs(ctx, slog.LevelError, "failed to get container", slog.Any("error", err))
 	}
 
 	if len(containersList) > 0 {
-		s.logger.LogAttrs(ctx, slog.LevelInfo, "noyra Etcd already running")
-		return
+		for _, container := range containersList {
+			if container.State == "running" {
+				s.logger.LogAttrs(ctx, slog.LevelInfo, "noyra Etcd already running")
+				return nil
+			}
+
+			if container.State != "running" {
+				errResume := s.agentService.ContainerResume(ctx, "noyra-etcd")
+				if errResume != nil {
+					s.logger.LogAttrs(ctx, slog.LevelError, "failed to resume etcd", slog.Any("error", errResume))
+
+					return errResume
+				}
+
+				s.logger.LogAttrs(ctx, slog.LevelInfo, "noyra Etcd resumed")
+				return nil
+			}
+
+			break
+		}
 	}
 
 	var mounts []component.ContainerMount
@@ -440,10 +467,12 @@ func (s *Supervisor) initEtcd(ctx context.Context) {
 	defer cancel()
 	errContainerStart := s.agentService.ContainerStart(timeoutCtx, startRequest)
 	if errContainerStart != nil {
-		slog.LogAttrs(ctx, slog.LevelError, "could not start container", slog.Any("error", errContainerStart))
-		os.Exit(1)
+		slog.LogAttrs(ctx, slog.LevelError, "could not start etcd", slog.Any("error", errContainerStart))
+		return oops.Wrapf(err, "could not start etcd")
 	}
 	slog.LogAttrs(ctx, slog.LevelInfo, "container start response")
+
+	return nil
 }
 
 var rng = rand.New(rand.NewSource(time.Now().UnixNano()))

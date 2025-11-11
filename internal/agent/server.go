@@ -34,7 +34,7 @@ type Server struct {
 	logger     *slog.Logger
 }
 
-func BuildServer(podmanContext context.Context, agent Agent, logger *slog.Logger) *Server {
+func BuildServer(agent Agent, logger *slog.Logger) *Server {
 	a := &Server{
 		agent:     agent,
 		serverMux: http.NewServeMux(),
@@ -198,7 +198,7 @@ func (s *Server) ContainerList(
 	ctx context.Context,
 	listRequest *protoAgent.ContainerListRequest,
 ) (*protoAgent.ContainerListResponse, error) {
-	containersList, err := s.agent.ContainerList(ctx, listRequest.GetContainersId(), listRequest.GetLabels())
+	containersList, err := s.agent.ContainerList(ctx, false, listRequest.GetContainersId(), listRequest.GetLabels())
 
 	protoAgentResponse := &protoAgent.ContainerListResponse{}
 
@@ -253,7 +253,10 @@ func (s *Server) ContainerList(
 	return containerListResponse, nil
 }
 
-func (s *Server) ContainerListener(in *protoAgent.ContainerListenerRequest, stream grpc.ServerStreamingServer[protoAgent.ContainerListenerResponse]) error {
+func (s *Server) ContainerListener(
+	in *protoAgent.ContainerListenerRequest,
+	stream grpc.ServerStreamingServer[protoAgent.ContainerListenerResponse],
+) error {
 
 	options := new(system.EventsOptions).WithStream(true)
 	options.WithFilters(map[string][]string{
