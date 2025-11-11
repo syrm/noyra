@@ -39,7 +39,11 @@ func BuildEtcdClient(
 	clientKeyFile string,
 	logger *slog.Logger,
 ) (*Client, error) {
-	generateCertificat(caCertFile, caKeyFile, serverCertFile, serverKeyFile, clientCertFile, clientKeyFile, logger)
+	errGen := generateCertificat(caCertFile, caKeyFile, serverCertFile, serverKeyFile, clientCertFile, clientKeyFile, logger)
+
+	if errGen != nil {
+		return nil, errGen
+	}
 
 	caCert, err := os.ReadFile(caCertFile)
 	if err != nil {
@@ -74,6 +78,7 @@ func BuildEtcdClient(
 
 	return &Client{
 		client: client,
+		logger: logger,
 	}, nil
 }
 
@@ -144,13 +149,13 @@ func generateCertificat(
 	clientCertFile string,
 	clientKeyFile string,
 	logger *slog.Logger,
-) {
+) error {
 	_, errCrt := os.Stat(caCertFile)
 	_, errKey := os.Stat(caKeyFile)
 
 	if errCrt == nil && errKey == nil {
-		logger.LogAttrs(context.Background(), slog.LevelInfo, "certificat not found")
-		return
+		logger.LogAttrs(context.Background(), slog.LevelInfo, "certificat found")
+		return nil
 	}
 
 	// Générer une nouvelle autorité de certification (CA) ou réutiliser l'existante
@@ -171,7 +176,7 @@ func generateCertificat(
 
 	caPrivKey, err := rsa.GenerateKey(cryptoRand.Reader, 4096)
 	if err != nil {
-		//log.Fatalf("Erreur: %v", err)
+		return err
 	}
 
 	caBytes, err := x509.CreateCertificate(cryptoRand.Reader, ca, ca, &caPrivKey.PublicKey, caPrivKey)
@@ -182,11 +187,11 @@ func generateCertificat(
 	caPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caBytes})
 	caPrivKeyPEM := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(caPrivKey)})
 
-	if errCa := os.WriteFile(caCertFile, caPEM, 0644); err != nil {
-		log.Fatal(errCa)
+	if errCa := os.WriteFile(caCertFile, caPEM, 0644); errCa != nil {
+		return errCa
 	}
-	if errCaPriv := os.WriteFile(caKeyFile, caPrivKeyPEM, 0600); err != nil {
-		log.Fatal(errCaPriv)
+	if errCaPriv := os.WriteFile(caKeyFile, caPrivKeyPEM, 0600); errCaPriv != nil {
+		return errCaPriv
 	}
 
 	// Générer un nouveau certificat serveur
@@ -206,23 +211,23 @@ func generateCertificat(
 
 	serverPrivKey, err := rsa.GenerateKey(cryptoRand.Reader, 4096)
 	if err != nil {
-		// log.Fatalf("Erreur: %v", err)
+		return err
 	}
 
 	serverBytes, err := x509.CreateCertificate(cryptoRand.Reader, serverCert, ca, &serverPrivKey.PublicKey, caPrivKey)
 	if err != nil {
-		// log.Fatalf("Erreur: %v", err)
+		return err
 	}
 
 	serverPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: serverBytes})
 	serverPrivKeyPEM := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(serverPrivKey)})
 
-	if errCrt := os.WriteFile(serverCertFile, serverPEM, 0644); err != nil {
+	if errCrt := os.WriteFile(serverCertFile, serverPEM, 0644); errCrt != nil {
 		log.Fatal(errCrt)
 	}
 
-	if errPriv := os.WriteFile(serverKeyFile, serverPrivKeyPEM, 0600); err != nil {
-		log.Fatal(errPriv)
+	if errPriv := os.WriteFile(serverKeyFile, serverPrivKeyPEM, 0600); errPriv != nil {
+		return errPriv
 	}
 
 	// Générer un nouveau certificat client
@@ -240,23 +245,23 @@ func generateCertificat(
 
 	clientPrivKey, err := rsa.GenerateKey(cryptoRand.Reader, 4096)
 	if err != nil {
-		// log.Fatalf("Erreur: %v", err)
+		return err
 	}
 
 	clientBytes, err := x509.CreateCertificate(cryptoRand.Reader, clientCert, ca, &clientPrivKey.PublicKey, caPrivKey)
 	if err != nil {
-		// log.Fatalf("Erreur: %v", err)
+		return err
 	}
 
 	clientPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: clientBytes})
 	clientPrivKeyPEM := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(clientPrivKey)})
 
 	if err := os.WriteFile(clientCertFile, clientPEM, 0644); err != nil {
-		// log.Fatal(err)
+		return err
 	}
 	if err := os.WriteFile(clientKeyFile, clientPrivKeyPEM, 0600); err != nil {
-		// log.Fatal(err)
+		return err
 	}
 
-	// log.Println("Nouveaux certificats générés avec succès")
+	return nil
 }

@@ -6,7 +6,6 @@ import (
 	"log/slog"
 	"math"
 	"net"
-	"os"
 	"sync/atomic"
 	"time"
 
@@ -70,13 +69,13 @@ func BuildDiscoveryService(ctx context.Context, nodeID string, agent *agent.Agen
 	return ds
 }
 
-func (ds *Service) Run(ctx context.Context) {
+func (ds *Service) Run(ctx context.Context) error {
 	grpcServer := grpc.NewServer(grpc.MaxConcurrentStreams(grpcMaxConcurrentStreams))
-	lis, err := net.Listen("tcp", ":18000")
-	if err != nil {
+	lis, errListen := net.Listen("tcp", ":18000")
+	if errListen != nil {
 		ds.logger.LogAttrs(ctx, slog.LevelError, "failed to listen",
-			slog.Any("error", err))
-		os.Exit(1)
+			slog.Any("error", errListen))
+		return errListen
 	}
 
 	xdsServer := server.NewServer(ctx, ds.clusterCache, server.CallbackFuncs{})
@@ -91,13 +90,35 @@ func (ds *Service) Run(ctx context.Context) {
 	ds.logger.LogAttrs(ctx, slog.LevelInfo, "EDS server started",
 		slog.Int("port", 18000))
 
-	if err := grpcServer.Serve(lis); err != nil {
-		ds.logger.LogAttrs(
-			ctx, slog.LevelError, "error starting server",
-			slog.Any("error", err),
-		)
-		os.Exit(1)
+	errChan := make(chan error)
+
+	go func() {
+		if err := grpcServer.Serve(lis); err != nil {
+			ds.logger.LogAttrs(
+				ctx, slog.LevelError, "error starting server",
+				slog.Any("error", err),
+			)
+
+			errChan <- err
+		}
+	}()
+
+	var errFromChan error
+
+	select {
+	case <-ctx.Done():
+		return closeDiscoveryService(lis, errFromChan)
+	case errFromChan = <-errChan:
+		return closeDiscoveryService(lis, errFromChan)
 	}
+}
+
+func closeDiscoveryService(lis net.Listener, parentErr error) error {
+	errListenClose := lis.Close()
+	if errListenClose != nil {
+		return oops.Wrapf(oops.Join(parentErr, errListenClose), "error shutdown discovery server")
+	}
+	return parentErr
 }
 
 func (ds *Service) SetSnapshot(ctx context.Context, resources map[resource.Type][]types.Resource) bool {
@@ -119,7 +140,7 @@ func (ds *Service) SetSnapshot(ctx context.Context, resources map[resource.Type]
 }
 
 func (ds *Service) init(ctx context.Context) {
-	containers, err := ds.agent.ContainerList(ctx, nil, nil)
+	containers, err := ds.agent.ContainerList(ctx, false, nil, nil)
 
 	if err != nil {
 		ds.logger.LogAttrs(ctx, slog.LevelError, "failed to list containers", slog.Any("error", err))
@@ -385,7 +406,7 @@ func (ds *Service) eventListener(ctx context.Context) error {
 		case event := <-containerListenerResponseChan:
 			if event.Action == "start" || event.Action == "create" {
 				containersID := []string{event.ID}
-				containersList, errList := ds.agent.ContainerList(ctx, containersID, nil)
+				containersList, errList := ds.agent.ContainerList(ctx, false, containersID, nil)
 
 				if errList != nil {
 					ds.logger.LogAttrs(ctx, slog.LevelWarn, "failed to get container labels", slog.Any("error", errList))

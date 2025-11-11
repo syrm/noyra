@@ -6,9 +6,11 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"syscall"
 
 	"github.com/containers/podman/v5/pkg/bindings"
 	gopsAgent "github.com/google/gops/agent"
+	"golang.org/x/sync/errgroup"
 
 	"blackprism.org/noyra/config"
 	"blackprism.org/noyra/internal/agent"
@@ -20,15 +22,8 @@ import (
 
 func main() {
 	ctx := context.Background()
-	ctx, cancel := signal.NotifyContext(ctx, os.Interrupt)
+	ctx, cancel := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer cancel()
-
-	go func() {
-		err := gopsAgent.Listen(gopsAgent.Options{Addr: "0.0.0.0:50000"})
-		if err != nil {
-			return
-		}
-	}()
 
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
 		AddSource: true,
@@ -39,6 +34,15 @@ func main() {
 			return a
 		},
 	}))
+
+	go func() {
+		err := gopsAgent.Listen(gopsAgent.Options{Addr: "0.0.0.0:50000"})
+		if err != nil {
+			logger.LogAttrs(context.Background(), slog.LevelError, "unable to start gops agent", slog.Any("error", err))
+
+			os.Exit(1)
+		}
+	}()
 
 	if os.Getenv("PODMAN_HOST") == "" {
 		logger.LogAttrs(context.Background(), slog.LevelError, "PODMAN_HOST env var is not set")
@@ -59,7 +63,11 @@ func main() {
 
 	agentService := agent.BuildAgent(podmanConnection, logger)
 	ds := discovery.BuildDiscoveryService(ctx, "noyra-id", agentService, logger)
-	go ds.Run(ctx)
+
+	errgrp, errgrpCtx := errgroup.WithContext(ctx)
+	errgrp.Go(func() error {
+		return ds.Run(errgrpCtx)
+	})
 
 	// for {
 	// 	time.Sleep(1 * time.Second)
@@ -82,12 +90,17 @@ func main() {
 	}
 
 	supervisorServer := supervisor.BuildSupervisor(agentService, etcdClient, config.Schema, logger)
-
-	go supervisorServer.Run(ctx)
-
-	// Initialize and start the Client server
 	apiServer := api.BuildAPIServer(etcdClient, logger)
-	go apiServer.Run(ctx)
 
-	<-ctx.Done()
+	errgrp.Go(func() error {
+		return supervisorServer.Run(errgrpCtx)
+	})
+
+	errgrp.Go(func() error {
+		return apiServer.Run(errgrpCtx)
+	})
+
+	if errWait := errgrp.Wait(); errWait != nil {
+		logger.LogAttrs(ctx, slog.LevelError, "error starting supervisor", slog.Any("error", errWait))
+	}
 }
