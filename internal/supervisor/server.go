@@ -245,6 +245,7 @@ func (s *Supervisor) Run(ctx context.Context) error {
 		s.deployService(ctx, service)
 	}
 
+	s.resyncCluster(ctx)
 	s.observeCluster(ctx)
 
 	return nil
@@ -290,6 +291,18 @@ func (s *Supervisor) saveClusterState(ctx context.Context) {
 		return
 	}
 	fmt.Printf("Deployment: %+v\n", d)
+}
+
+func (s *Supervisor) resyncCluster(ctx context.Context) error {
+	data, errGet := s.etcdClient.Get(ctx, "/")
+
+	fmt.Println(data)
+
+	if errGet != nil {
+		s.logger.LogAttrs(ctx, slog.LevelError, "error while calling Get", slog.Any("error", errGet))
+		return errGet
+	}
+
 }
 
 func (s *Supervisor) observeCluster(ctx context.Context) error {
