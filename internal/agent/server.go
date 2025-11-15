@@ -51,12 +51,6 @@ func BuildServer(agent Agent, logger *slog.Logger) *Server {
 }
 
 func (s *Server) Run(ctx context.Context) int {
-	exitCode := s.agent.StartNoyra(ctx)
-
-	if exitCode > 0 {
-		return exitCode
-	}
-
 	flag.Parse()
 
 	//s.serverMux.HandleFunc("/containers", s.ListContainer())

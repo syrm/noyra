@@ -269,14 +269,58 @@ func (ds *Service) makeConfigSource() *core.ConfigSource {
 func (ds *Service) makeListenerConfig(name string) *listener.Listener {
 	routerConfig, _ := anypb.New(&router.Router{})
 
+	// Configuration de routage statique
+	routeConfig := &route.RouteConfiguration{
+		Name: "local_route",
+		VirtualHosts: []*route.VirtualHost{
+			{
+				Name:    "smallapp_service",
+				Domains: []string{"smallapp.local"},
+				Routes: []*route.Route{
+					{
+						Match: &route.RouteMatch{
+							PathSpecifier: &route.RouteMatch_Prefix{
+								Prefix: "/",
+							},
+						},
+						Action: &route.Route_Route{
+							Route: &route.RouteAction{
+								ClusterSpecifier: &route.RouteAction_Cluster{
+									Cluster: "smallapp",
+								},
+							},
+						},
+					},
+				},
+			},
+			{
+				Name:    "bigapp_service",
+				Domains: []string{"bigapp.local"},
+				Routes: []*route.Route{
+					{
+						Match: &route.RouteMatch{
+							PathSpecifier: &route.RouteMatch_Prefix{
+								Prefix: "/",
+							},
+						},
+						Action: &route.Route_Route{
+							Route: &route.RouteAction{
+								ClusterSpecifier: &route.RouteAction_Cluster{
+									Cluster: "bigapp",
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
 	manager := &hcm.HttpConnectionManager{
 		CodecType:  hcm.HttpConnectionManager_AUTO,
-		StatPrefix: "http",
-		RouteSpecifier: &hcm.HttpConnectionManager_Rds{
-			Rds: &hcm.Rds{
-				ConfigSource:    ds.makeConfigSource(),
-				RouteConfigName: name,
-			},
+		StatPrefix: "ingress_http",
+		RouteSpecifier: &hcm.HttpConnectionManager_RouteConfig{
+			RouteConfig: routeConfig,
 		},
 		HttpFilters: []*hcm.HttpFilter{{
 			Name: "http-router",
@@ -299,14 +343,14 @@ func (ds *Service) makeListenerConfig(name string) *listener.Listener {
 					Protocol: core.SocketAddress_TCP,
 					Address:  "0.0.0.0",
 					PortSpecifier: &core.SocketAddress_PortValue{
-						PortValue: 10000, // @TODO voir si on peut le changer, ou mettre 80 sans être root
+						PortValue: 10000,
 					},
 				},
 			},
 		},
 		FilterChains: []*listener.FilterChain{{
 			Filters: []*listener.Filter{{
-				Name: "http-connection-manager",
+				Name: "envoy.filters.network.http_connection_manager",
 				ConfigType: &listener.Filter_TypedConfig{
 					TypedConfig: pbst,
 				},
@@ -320,7 +364,7 @@ func (ds *Service) makeRouteConfig(clusterName string, clusterDomain string, nam
 		Name: name,
 		VirtualHosts: []*route.VirtualHost{{
 			Name:    name,
-			Domains: []string{clusterDomain + ":10000"}, // @TODO voir pour un port configurable
+			Domains: []string{clusterDomain + ":9898"}, // @TODO voir pour un port configurable
 			Routes: []*route.Route{{
 				Match: &route.RouteMatch{
 					PathSpecifier: &route.RouteMatch_Prefix{

@@ -6,9 +6,8 @@ import (
 	"log/slog"
 	"math"
 	"net"
-	"time"
+	"os"
 
-	protoAgent "blackprism.org/noyra/api/agent/v1"
 	"blackprism.org/noyra/internal/agent/component"
 
 	nettypes "github.com/containers/common/libnetwork/types"
@@ -158,6 +157,17 @@ func (a *Agent) ContainerStart(ctx context.Context, containerRequest component.C
 	var memoryLimit int64 = 100_000_000 // 100mb
 	var cpuQuota int64 = 10_000         // 10ms cpu
 	var cpuPeriod uint64 = 1_000_000
+	var trueValue = true
+
+	containerSecurityConfig := specgen.ContainerSecurityConfig{
+		CapDrop:         []string{"ALL"},
+		NoNewPrivileges: &trueValue,
+	}
+
+	if containerRequest.UserNS {
+		containerSecurityConfig.User = fmt.Sprintf("%d", os.Getuid())
+		containerSecurityConfig.UserNS = specgen.Namespace{NSMode: specgen.KeepID}
+	}
 
 	containerSpec := specgen.SpecGenerator{
 		ContainerBasicConfig: specgen.ContainerBasicConfig{
@@ -192,6 +202,7 @@ func (a *Agent) ContainerStart(ctx context.Context, containerRequest component.C
 				},
 			},
 		},
+		ContainerSecurityConfig: containerSecurityConfig,
 	}
 
 	response, errList := containers.CreateWithSpec(a.podmanContext, &containerSpec, nil)
@@ -288,7 +299,7 @@ func (a *Agent) ContainerStop(ctx context.Context, containerIDorName string) err
 }
 
 func (a *Agent) ContainerRemove(ctx context.Context, containerIDorName string) error {
-	// @TODO volume shouldn't be removed
+	// @TODO volume shouldn't be removed, or maybe
 	force := true
 	volumes := true
 	removeOptions := &containers.RemoveOptions{
@@ -296,7 +307,7 @@ func (a *Agent) ContainerRemove(ctx context.Context, containerIDorName string) e
 		Volumes: &volumes,
 	}
 
-	response, err := containers.Remove(ctx, containerIDorName, removeOptions)
+	response, err := containers.Remove(a.podmanContext, containerIDorName, removeOptions)
 
 	if err != nil {
 		a.logger.LogAttrs(ctx, slog.LevelError, "error removing container",
@@ -462,70 +473,4 @@ func (a *Agent) pullImage(ctx context.Context, imageName string) error {
 	}
 
 	return nil
-}
-
-func (a *Agent) StartNoyra(ctx context.Context) int {
-	containerListRequest := &protoAgent.ContainerListRequest{}
-	containerListRequest.SetLabels(
-		map[string]string{
-			"noyra.name": "noyra-envoy",
-		},
-	)
-
-	filters := make(map[string]map[string]string)
-	filters["label"] = map[string]string{
-		"noyra.name": "noyra-envoy",
-	}
-
-	containersList := a.ListContainer(ctx, filters)
-
-	// if err != nil {
-	// 	a.logger.LogAttrs(ctx, slog.LevelError, "Error listing containers",
-	// 		slog.Any("error", err))
-	// }
-
-	if len(containersList) > 0 {
-		a.logger.LogAttrs(ctx, slog.LevelInfo, "noyra Envoy already running")
-		return 0
-	}
-
-	configPath := "/mnt/data/src/go/noyra/config/envoy.yaml"
-
-	containerMount := component.ContainerMount{}
-	containerMount.Destination = "/config.yaml"
-	containerMount.Type = "bind"
-	containerMount.Source = configPath
-	containerMount.Options = []string{"rbind", "ro"}
-
-	containerPortMapping := component.ContainerPortMapping{}
-	containerPortMapping.ContainerPort = 10000
-	containerPortMapping.HostPort = 10000
-
-	containerPortMapping2 := component.ContainerPortMapping{}
-	containerPortMapping2.ContainerPort = 19001
-	containerPortMapping2.HostPort = 19001
-
-	containerRequest := component.ContainerRequest{}
-	containerRequest.Image = "envoyproxy/envoy:distroless-v1.36-latest"
-	containerRequest.Name = "noyra-envoy"
-	containerRequest.Commands = []string{"-c", "/config.yaml", "--drain-time-a", "5"}
-	containerRequest.ExposedPorts = map[uint32]string{
-		10000: "tcp",
-		19001: "tcp",
-	}
-	containerRequest.Network = "noyra"
-	containerRequest.Labels = map[string]string{"noyra.name": "noyra-envoy"}
-	containerRequest.Mounts = []component.ContainerMount{containerMount}
-	containerRequest.PortMappings = []component.ContainerPortMapping{containerPortMapping, containerPortMapping2}
-
-	// Contact the server and print out its response.
-	timeoutCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
-	defer cancel()
-	err := a.ContainerStart(timeoutCtx, containerRequest)
-	if err != nil {
-		a.logger.LogAttrs(ctx, slog.LevelError, "could not start container", slog.Any("error", err))
-		return 1
-	}
-
-	return 0
 }

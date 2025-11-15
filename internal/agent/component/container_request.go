@@ -11,6 +11,7 @@ type ContainerRequest struct {
 	Mounts       []ContainerMount
 	Volumes      []ContainerVolume
 	PortMappings []ContainerPortMapping
+	UserNS       bool
 }
 
 type ContainerMount struct {

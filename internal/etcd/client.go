@@ -77,8 +77,11 @@ func BuildEtcdClient(
 	}
 
 	return &Client{
-		client: client,
-		logger: logger,
+		client:         client,
+		caCertFile:     caCertFile,
+		serverCertFile: serverCertFile,
+		serverKeyFile:  serverKeyFile,
+		logger:         logger,
 	}, nil
 }
 
@@ -98,6 +101,22 @@ func (e *Client) Put(ctx context.Context, key, value string) error {
 		return err
 	}
 	return nil
+}
+
+func (e *Client) GetKeys(ctx context.Context) ([]string, error) {
+	resp, err := e.client.Get(ctx, "/", clientv3.WithPrefix())
+	if err != nil {
+		e.logger.LogAttrs(ctx, slog.LevelError, "error getting value from etcd", slog.Any("error", err))
+		return []string{}, err
+	}
+
+	keys := make([]string, 0, len(resp.Kvs))
+
+	for _, kv := range resp.Kvs {
+		keys = append(keys, string(kv.Key))
+	}
+
+	return keys, nil
 }
 
 func (e *Client) Get(ctx context.Context, key string) (string, error) {
