@@ -236,7 +236,15 @@ func (s *Supervisor) Run(ctx context.Context) error {
 		return oops.Wrapf(errEtcd, "supervisor can't start etcd")
 	}
 
+	errEnvoy := s.startEnvoy(ctx)
+
+	if errEnvoy != nil {
+		return oops.Wrapf(errEtcd, "supervisor can't start envoy")
+	}
+
 	// @TODO attention etcd n'a pas encore été démarré
+	time.Sleep(5 * time.Second)
+
 	s.saveClusterState(ctx)
 	s.logger.LogAttrs(ctx, slog.LevelInfo, "deploying toc toc", slog.Int("services", len(s.config.Deployment)))
 
@@ -245,6 +253,7 @@ func (s *Supervisor) Run(ctx context.Context) error {
 		s.deployService(ctx, service)
 	}
 
+	s.resyncCluster(ctx)
 	s.observeCluster(ctx)
 
 	return nil
@@ -290,6 +299,26 @@ func (s *Supervisor) saveClusterState(ctx context.Context) {
 		return
 	}
 	fmt.Printf("Deployment: %+v\n", d)
+}
+
+func (s *Supervisor) resyncCluster(ctx context.Context) error {
+	fmt.Println("BOUHHHHHHHHHHHHHHHHHHHHHH")
+
+	data, errGet := s.etcdClient.GetKeys(ctx)
+
+	fmt.Printf("BOUHHHHHHHHHHHHHHHHHHHHHH %+v\n", data)
+
+	for _, key := range data {
+		data2, _ := s.etcdClient.Get(ctx, key)
+		fmt.Printf("RESYNC %+v\n", data2)
+	}
+
+	if errGet != nil {
+		s.logger.LogAttrs(ctx, slog.LevelError, "error while calling Get", slog.Any("error", errGet))
+		return errGet
+	}
+
+	return nil
 }
 
 func (s *Supervisor) observeCluster(ctx context.Context) error {
@@ -368,33 +397,98 @@ func (s *Supervisor) deployService(ctx context.Context, deploymentConfig Deploym
 	}
 }
 
-func (s *Supervisor) startEtcd(ctx context.Context) error {
-	containersList, err := s.agentService.ContainerList(ctx, true, nil, map[string]string{"noyra.name": "noyra-etcd"})
+func (s *Supervisor) startEnvoy(ctx context.Context) error {
+	containersList, errList := s.agentService.ContainerList(
+		ctx,
+		true,
+		nil,
+		map[string]string{"noyra.name": "noyra-envoy"},
+	)
 
-	if err != nil {
-		slog.LogAttrs(ctx, slog.LevelError, "failed to get container", slog.Any("error", err))
+	if errList != nil {
+		slog.LogAttrs(ctx, slog.LevelError, "failed to get container", slog.Any("error", errList))
 	}
 
 	if len(containersList) > 0 {
 		for _, container := range containersList {
 			if container.State == "running" {
-				s.logger.LogAttrs(ctx, slog.LevelInfo, "noyra Etcd already running")
+				s.logger.LogAttrs(ctx, slog.LevelInfo, "noyra envoy already running")
 				return nil
 			}
 
-			if container.State != "running" {
-				errResume := s.agentService.ContainerResume(ctx, "noyra-etcd")
-				if errResume != nil {
-					s.logger.LogAttrs(ctx, slog.LevelError, "failed to resume etcd", slog.Any("error", errResume))
+			errResume := s.agentService.ContainerRemove(ctx, "noyra-envoy")
+			if errResume != nil {
+				s.logger.LogAttrs(ctx, slog.LevelError, "failed to remove envoy", slog.Any("error", errResume))
+				return errResume
+			}
+		}
+	}
 
-					return errResume
-				}
+	// @TODO heu a mettre en ENV
+	configPath := "/mnt/data/src/go/noyra/config/envoy.yaml"
 
-				s.logger.LogAttrs(ctx, slog.LevelInfo, "noyra Etcd resumed")
+	containerMount := component.ContainerMount{}
+	containerMount.Destination = "/config.yaml"
+	containerMount.Type = "bind"
+	containerMount.Source = configPath
+	containerMount.Options = []string{"rbind", "ro"}
+
+	containerPortMapping := component.ContainerPortMapping{}
+	containerPortMapping.ContainerPort = 10000
+	containerPortMapping.HostPort = 10000
+
+	containerPortMapping2 := component.ContainerPortMapping{}
+	containerPortMapping2.ContainerPort = 19001
+	containerPortMapping2.HostPort = 19001
+
+	containerRequest := component.ContainerRequest{}
+	containerRequest.Image = "envoyproxy/envoy:distroless-v1.36-latest"
+	containerRequest.Name = "noyra-envoy"
+	containerRequest.Commands = []string{"-c", "/config.yaml", "--drain-time-s", "5"}
+	containerRequest.ExposedPorts = map[uint32]string{
+		10000: "tcp",
+		19001: "tcp",
+	}
+	containerRequest.Network = "noyra"
+	containerRequest.Labels = map[string]string{"noyra.name": "noyra-envoy"}
+	containerRequest.Mounts = []component.ContainerMount{containerMount}
+	containerRequest.PortMappings = []component.ContainerPortMapping{containerPortMapping, containerPortMapping2}
+
+	// Contact the server and print out its response.
+	timeoutCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	err := s.agentService.ContainerStart(timeoutCtx, containerRequest)
+	if err != nil {
+		s.logger.LogAttrs(ctx, slog.LevelError, "could not start container", slog.Any("error", err))
+		return err
+	}
+
+	return nil
+}
+
+func (s *Supervisor) startEtcd(ctx context.Context) error {
+	containersList, errList := s.agentService.ContainerList(ctx, true, nil, map[string]string{"noyra.name": "noyra-etcd"})
+
+	if errList != nil {
+		slog.LogAttrs(ctx, slog.LevelError, "failed to get container", slog.Any("error", errList))
+	}
+
+	if len(containersList) > 0 {
+		for _, container := range containersList {
+			if container.State == "running" {
+				s.logger.LogAttrs(ctx, slog.LevelInfo, "noyra etcd already running")
 				return nil
 			}
 
-			break
+			errResume := s.agentService.ContainerResume(ctx, "noyra-etcd")
+			if errResume != nil {
+				s.logger.LogAttrs(ctx, slog.LevelError, "failed to resume etcd", slog.Any("error", errResume))
+
+				return errResume
+			}
+
+			s.logger.LogAttrs(ctx, slog.LevelInfo, "noyra etcd resumed")
+			return nil
 		}
 	}
 
@@ -436,8 +530,9 @@ func (s *Supervisor) startEtcd(ctx context.Context) error {
 	}
 
 	startRequest := component.ContainerRequest{
-		Image: "bitnami/etcd:3.5.21",
-		Name:  "noyra-etcd",
+		Image:  "bitnami/etcd:3.5.21",
+		Name:   "noyra-etcd",
+		UserNS: true,
 		Env: map[string]string{
 			"ALLOW_NONE_AUTHENTICATION":  "true",
 			"BITNAMI_DEBUG":              "true",
@@ -468,7 +563,7 @@ func (s *Supervisor) startEtcd(ctx context.Context) error {
 	errContainerStart := s.agentService.ContainerStart(timeoutCtx, startRequest)
 	if errContainerStart != nil {
 		slog.LogAttrs(ctx, slog.LevelError, "could not start etcd", slog.Any("error", errContainerStart))
-		return oops.Wrapf(err, "could not start etcd")
+		return oops.Wrapf(errList, "could not start etcd")
 	}
 	slog.LogAttrs(ctx, slog.LevelInfo, "container start response")
 
