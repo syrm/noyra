@@ -1,0 +1,5 @@
+:toc: left
+:toc-title: Table des matières
+:toclevels: 3
+:icons: font
+:sectnums:

@@ -8,15 +8,14 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/containers/podman/v5/pkg/bindings"
 	gopsAgent "github.com/google/gops/agent"
 	"golang.org/x/sync/errgroup"
 
 	"blackprism.org/noyra/config"
 	"blackprism.org/noyra/internal/agent"
-	"blackprism.org/noyra/internal/api"
 	"blackprism.org/noyra/internal/discovery"
 	"blackprism.org/noyra/internal/etcd"
+	"blackprism.org/noyra/internal/podman"
 	"blackprism.org/noyra/internal/supervisor"
 )
 
@@ -49,19 +48,27 @@ func main() {
 		os.Exit(1)
 	}
 
+	client := podman.BuildClient("/run/user/1000/podman/podman.sock", logger)
+	//errLI := client.ListImages(ctx)
+	//
+	//if errLI != nil {
+	//	logger.LogAttrs(ctx, slog.LevelError, "error list images", slog.Any("error", errLI))
+	//}
+	//client.PullImage(ctx, "memcached")
+	errA := client.StopContainer(ctx, "214c28dd55eb")
+
+	if errA != nil {
+		logger.LogAttrs(ctx, slog.LevelError, "unable to stop container", slog.Any("error", errA))
+	}
+
 	if os.Getenv("NOYRA_CONFIG") == "" {
 		logger.LogAttrs(context.Background(), slog.LevelError, "NOYRA_CONFIG env var is not set")
 		os.Exit(1)
 	}
 
-	podmanConnection, err := bindings.NewConnection(ctx, os.Getenv("PODMAN_HOST"))
-	if err != nil {
-		logger.LogAttrs(ctx, slog.LevelError, "error connecting to Podman",
-			slog.Any("error", err))
-		os.Exit(1)
-	}
+	podmanClient := podman.BuildClient("/run/user/1000/podman/podman.sock", logger)
 
-	agentService := agent.BuildAgent(podmanConnection, logger)
+	agentService := agent.BuildAgent(podmanClient, logger)
 	ds := discovery.BuildDiscoveryService(ctx, "noyra-id", agentService, logger)
 
 	errgrp, errgrpCtx := errgroup.WithContext(ctx)
@@ -90,15 +97,15 @@ func main() {
 	}
 
 	supervisorServer := supervisor.BuildSupervisor(agentService, etcdClient, config.Schema, logger)
-	apiServer := api.BuildAPIServer(etcdClient, logger)
+	//apiServer := api.BuildAPIServer(etcdClient, logger)
 
 	errgrp.Go(func() error {
 		return supervisorServer.Run(errgrpCtx)
 	})
 
-	errgrp.Go(func() error {
-		return apiServer.Run(errgrpCtx)
-	})
+	//errgrp.Go(func() error {
+	//	return apiServer.Run(errgrpCtx)
+	//})
 
 	if errWait := errgrp.Wait(); errWait != nil {
 		logger.LogAttrs(ctx, slog.LevelError, "error starting supervisor", slog.Any("error", errWait))

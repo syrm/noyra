@@ -1,0 +1,25 @@
+edition = "2023";
+
+import "google/protobuf/go_features.proto";
+option features.(pb.go).api_level = API_OPAQUE;
+
+package loadbalancer.v1;
+
+service LoadbalancerService {
+  rpc UpdateConfig (UpdateConfigRequest) returns (UpdateConfigResponse) {}
+
+}
+
+message UpdateConfigRequest {
+  repeated Host hosts = 1;
+}
+
+message Host {
+  string host = 1;
+  repeated string targets = 2;
+}
+
+message UpdateConfigResponse {
+  string status = 1;
+  string message = 2;
+}

@@ -1,0 +1,5 @@
+{
+  "dependencies": {
+    "@musistudio/claude-code-router": "^1.0.65"
+  }
+}

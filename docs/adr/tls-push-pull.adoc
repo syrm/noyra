@@ -1,0 +1,42 @@
+= TLS
+:toc:
+:icons: font
+
+===== Décision
+Push
+
+==== Push ou Pull pour les sidecars ?
+===== Pattern 1 : Push (le supervisor envoie les certs)
+.Avantages
+* Le supervisor a le contrôle total — il sait exactement qui a quoi
+* Révocation immédiate — il pousse un nouveau cert ou rien
+* Le sidecar est passif, logique simple
+
+.Inconvénients
+* Le supervisor doit connaître tous les sidecars à l'avance
+* Si le supervisor est down au démarrage d'un sidecar, celui-ci n'a pas de cert
+* Couplage fort : le sidecar doit avoir un canal ouvert avec le supervisor
+
+===== Pattern 2 : Pull (le sidecar demande son cert)
+.Avantages
+* Le sidecar démarre indépendamment, il demande quand il est prêt
+* Scalable naturellement — un nouveau sidecar arrive, il demande, il reçoit
+* Pas besoin que le supervisor connaisse les sidecars à l'avance
+
+.Inconvénients
+* Le supervisor doit authentifier la demande — "c'est bien un vrai sidecar qui demande ?"
+* Révocation plus complexe — le cert est déjà chez le sidecar
+* Le sidecar doit gérer lui-même le renouvellement
+
+====== Complexité du pattern 2
+
+-- Pour obtenir un cert, il faut s'authentifier. Mais pour s'authentifier, il faut... un cert.
+Il faut une identité initiale avant d'en avoir une — Vault résout ça avec des tokens éphémères, SPIRE avec une attestation de l'environnement (node attestation).
+
+En pratique :
+Si tu contrôles l'infra et les sidecars sont connus → push plus simple
+Si tu as un environnement dynamique avec des sidecars qui arrivent/partent → pull plus adapté
+
+====== Conclusion
+Le supervisor de Noyra étant chargé du déploiement et du scaling des pods, il contrôle l'infra
+et de plus la solution push étant plus simple, on part sur la solution push.

@@ -1,4 +1,5 @@
 deployments/certs/
+vendor
 
 # Devenv
 .devenv*

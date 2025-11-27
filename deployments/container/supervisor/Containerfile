@@ -1,0 +1,27 @@
+FROM golang:latest AS builder
+
+RUN echo "appuser:x:1010:1010::/home/appuser:/sbin/nologin" > /tmp/passwd && \
+    echo "appgroup:x:1010:" > /tmp/group && \
+    echo "0:x:0:appuser" >> /tmp/group
+#RUN useradd --uid 1010 appuser
+# We need to create a file/folder into /home/appuser otherwise COPY --chown from scratch don't work
+RUN mkdir -p /home/appuser/.config
+
+WORKDIR /app
+ADD . /app
+
+RUN go mod download
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 GOEXPERIMENT=jsonv2 go build -o supervisor cmd/noyra/main.go
+
+FROM scratch
+
+COPY --from=builder /tmp/passwd /etc/passwd
+COPY --from=builder /tmp/group /etc/group
+
+COPY --from=builder --chown=1010:1010 /home/appuser /home/appuser
+COPY --from=builder /app/supervisor /
+
+ENV HOME=/home/appuser
+USER appuser
+
+ENTRYPOINT ["./supervisor"]

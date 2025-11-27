@@ -1,0 +1,33 @@
+= Guide de déploiement
+include::_attributes.adoc[]
+
+xref:book.adoc[← Retour au sommaire]
+
+== Prérequis
+
+* Go 1.22+
+* Docker
+* Keycloak 24+
+
+== Lancer le service
+
+[source,bash]
+----
+docker compose up -d
+go run ./cmd/auth
+----
+
+== Infrastructure
+
+[mermaid]
+....
+graph TD
+    LB[Load Balancer] --> A1[Auth Service #1]
+    LB --> A2[Auth Service #2]
+    A1 --> K[Keycloak]
+    A2 --> K
+    A1 --> R[(Redis)]
+    A2 --> R[(Redis)]
+....
+
+NOTE: Les deux instances partagent le même Redis pour les sessions.

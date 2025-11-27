@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"log/slog"
 	"net"
@@ -9,10 +10,7 @@ import (
 	"time"
 
 	protoAgent "blackprism.org/noyra/api/agent/v1"
-	"blackprism.org/noyra/internal/agent/component"
 
-	"github.com/containers/podman/v5/pkg/bindings/containers"
-	"github.com/containers/podman/v5/pkg/bindings/system"
 	"github.com/fullstorydev/grpchan/inprocgrpc"
 	"google.golang.org/grpc"
 )
@@ -26,8 +24,6 @@ const (
 
 // @TODO le nom Server MEH
 type Server struct {
-	protoAgent.UnimplementedAgentServiceServer
-
 	agent      Agent
 	serverMux  *http.ServeMux
 	GrpcServer *grpc.Server
@@ -53,7 +49,7 @@ func BuildServer(agent Agent, logger *slog.Logger) *Server {
 func (s *Server) Run(ctx context.Context) int {
 	flag.Parse()
 
-	//s.serverMux.HandleFunc("/containers", s.ListContainer())
+	//s.serverMux.HandleFunc("/containers", s.ListContainers())
 	//
 	//server := &http.Server{
 	//	Addr:    ":8686",
@@ -83,53 +79,54 @@ func (s *Server) ContainerStart(
 	ctx context.Context,
 	startRequest *protoAgent.ContainerStartRequest,
 ) (*protoAgent.ContainerStartResponse, error) {
-	mounts := make([]component.ContainerMount, len(startRequest.GetMounts()))
+	/*
+		mounts := make([]component.ContainerMount, len(startRequest.GetMounts()))
 
-	for i, m := range startRequest.GetMounts() {
-		mounts[i] = component.ContainerMount{
-			Destination: m.GetDestination(),
-			Source:      m.GetSource(),
-			Type:        m.GetType(),
-			Options:     m.GetOptions(),
+		for i, m := range startRequest.GetMounts() {
+			mounts[i] = component.ContainerMount{
+				Destination: m.GetDestination(),
+				Source:      m.GetSource(),
+				Type:        m.GetType(),
+				Options:     m.GetOptions(),
+			}
 		}
-	}
 
-	volumes := make([]component.ContainerVolume, len(startRequest.GetVolumes()))
-	for i, v := range startRequest.GetVolumes() {
-		volumes[i] = component.ContainerVolume{
-			Destination: v.GetDestination(),
-			Source:      v.GetSource(),
-			Options:     v.GetOptions(),
+		volumes := make([]component.ContainerVolume, len(startRequest.GetVolumes()))
+		for i, v := range startRequest.GetVolumes() {
+			volumes[i] = component.ContainerVolume{
+				Destination: v.GetDestination(),
+				Source:      v.GetSource(),
+				Options:     v.GetOptions(),
+			}
 		}
-	}
 
-	portMappings := make([]component.ContainerPortMapping, len(startRequest.GetPortMappings()))
-	for i, p := range startRequest.GetPortMappings() {
-		portMappings[i] = component.ContainerPortMapping{
-			ContainerPort: p.GetContainerPort(),
-			HostPort:      p.GetHostPort(),
+		portMappings := make([]component.ContainerPortMapping, len(startRequest.GetPortMappings()))
+		for i, p := range startRequest.GetPortMappings() {
+			portMappings[i] = component.ContainerPortMapping{
+				ContainerPort: p.GetContainerPort(),
+				HostPort:      p.GetHostPort(),
+			}
 		}
-	}
 
-	errContainerStart := s.agent.ContainerStart(ctx, component.ContainerRequest{
-		Name:         startRequest.GetName(),
-		Image:        startRequest.GetImage(),
-		Commands:     startRequest.GetCommand(),
-		Labels:       startRequest.GetLabels(),
-		Env:          startRequest.GetEnv(),
-		ExposedPorts: startRequest.GetExposedPorts(),
-		Network:      startRequest.GetNetwork(),
-		Mounts:       mounts,
-		Volumes:      volumes,
-		PortMappings: portMappings,
-	})
-
+		errContainerStart := s.agent.ContainerStart(ctx, component.ContainerRequest{
+			Name:         startRequest.GetName(),
+			Image:        startRequest.GetImage(),
+			Commands:     startRequest.GetCommand(),
+			Labels:       startRequest.GetLabels(),
+			Env:          startRequest.GetEnv(),
+			ExposedPorts: startRequest.GetExposedPorts(),
+			Network:      startRequest.GetNetwork(),
+			Mounts:       mounts,
+			Volumes:      volumes,
+			PortMappings: portMappings,
+		})
+	*/
 	protoAgentResponse := &protoAgent.ContainerStartResponse{}
 
-	if errContainerStart != nil {
-		protoAgentResponse.SetStatus("KO")
-		return protoAgentResponse, errContainerStart
-	}
+	//if errContainerStart != nil {
+	//	protoAgentResponse.SetStatus("KO")
+	//	return protoAgentResponse, errContainerStart
+	//}
 
 	protoAgentResponse.SetStatus("OK")
 
@@ -166,7 +163,8 @@ func (s *Server) ContainerRemove(
 	removeRequest *protoAgent.ContainerRemoveRequest,
 ) (*protoAgent.ContainerRemoveResponse, error) {
 	containerID := removeRequest.GetContainerId()
-	err := s.agent.ContainerRemove(ctx, containerID)
+	//err := s.agent.ContainerRemove(ctx, containerID)
+	err := errors.New("not implemented")
 
 	protoAgentResponse := &protoAgent.ContainerRemoveResponse{}
 
@@ -192,7 +190,8 @@ func (s *Server) ContainerList(
 	ctx context.Context,
 	listRequest *protoAgent.ContainerListRequest,
 ) (*protoAgent.ContainerListResponse, error) {
-	containersList, err := s.agent.ContainerList(ctx, false, listRequest.GetContainersId(), listRequest.GetLabels())
+	//containersList, err := s.agent.ContainerList(ctx, false, listRequest.GetContainersId(), listRequest.GetLabels())
+	err := errors.New("not implemented")
 
 	protoAgentResponse := &protoAgent.ContainerListResponse{}
 
@@ -211,35 +210,35 @@ func (s *Server) ContainerList(
 
 	containerInfoList := make(map[string]*protoAgent.ContainerInfo)
 
-	for _, c := range containersList {
-		var exposedPort int32
-		for key := range c.ExposedPort {
-			exposedPort = int32(key)
-			break
-		}
-
-		var ipAddress string
-		// @TODO interdit d'appeler podman ici
-		inspectData, err := containers.Inspect(ctx, c.ID, &containers.InspectOptions{})
-		if err == nil && inspectData.NetworkSettings != nil {
-			for name, networkInspected := range inspectData.NetworkSettings.Networks {
-				if name == "noyra" {
-					ipAddress = networkInspected.IPAddress
-					break
-				}
-			}
-		}
-
-		containerInfo := &protoAgent.ContainerInfo{}
-		containerInfo.SetId(c.ID)
-		containerInfo.SetName(c.Name)
-		containerInfo.SetLabels(c.Labels)
-		containerInfo.SetExposedPort(exposedPort)
-		containerInfo.SetIpAddress(ipAddress)
-		containerInfo.SetState(c.State)
-
-		containerInfoList[c.ID] = containerInfo
-	}
+	//for _, c := range containersList {
+	//	var exposedPort int32
+	//	for key := range c.ExposedPort {
+	//		exposedPort = int32(key)
+	//		break
+	//	}
+	//
+	//	var ipAddress string
+	//	// @TODO interdit d'appeler podman ici
+	//	inspectData, err := containers.Inspect(ctx, c.ID, &containers.InspectOptions{})
+	//	if err == nil && inspectData.NetworkSettings != nil {
+	//		for name, networkInspected := range inspectData.NetworkSettings.Networks {
+	//			if name == "noyra" {
+	//				ipAddress = networkInspected.IPAddress
+	//				break
+	//			}
+	//		}
+	//	}
+	//
+	//	containerInfo := &protoAgent.ContainerInfo{}
+	//	containerInfo.SetId(c.ID)
+	//	containerInfo.SetName(c.Name)
+	//	containerInfo.SetLabels(c.Labels)
+	//	containerInfo.SetExposedPort(exposedPort)
+	//	containerInfo.SetIpAddress(ipAddress)
+	//	containerInfo.SetState(c.State)
+	//
+	//	containerInfoList[c.ID] = containerInfo
+	//}
 
 	containerListResponse := &protoAgent.ContainerListResponse{}
 	containerListResponse.SetContainers(containerInfoList)
@@ -252,49 +251,51 @@ func (s *Server) ContainerListener(
 	stream grpc.ServerStreamingServer[protoAgent.ContainerListenerResponse],
 ) error {
 
-	options := new(system.EventsOptions).WithStream(true)
-	options.WithFilters(map[string][]string{
-		"type":  {"container"},
-		"event": {"create", "start", "stop", "die"},
-	})
+	//options := new(system.EventsOptions).WithStream(true)
+	//options.WithFilters(map[string][]string{
+	//	"type":  {"container"},
+	//	"event": {"create", "start", "stop", "die"},
+	//})
+	//
+	//containerListenerResponseChan := make(chan component.ContainerListenerResponse, 1000)
+	//
+	//go func() {
+	//	err := s.agent.ContainerListener(stream.Context(), containerListenerResponseChan)
+	//	if err != nil {
+	//		s.logger.LogAttrs(stream.Context(), slog.LevelError, "error setting up events listener", slog.Any("error", err))
+	//	}
+	//}()
 
-	containerListenerResponseChan := make(chan component.ContainerListenerResponse, 1000)
+	//for {
+	//	select {
+	//	case event := <-containerListenerResponseChan:
+	//		containerEvent := &protoAgent.ContainerListenerResponse{}
+	//		containerEvent.SetId(event.ID)
+	//		containerEvent.SetAction(event.Action)
+	//
+	//		if err := stream.Send(containerEvent); err != nil {
+	//			slog.LogAttrs(stream.Context(), slog.LevelError, "error sending container event",
+	//				slog.Any("error", err),
+	//				slog.String("containerID", event.ID),
+	//				slog.String("action", event.Action),
+	//			)
+	//			return err
+	//		}
+	//
+	//		switch event.Action {
+	//		case "create":
+	//			slog.LogAttrs(stream.Context(), slog.LevelInfo, "container created", slog.String("containerId", event.ID))
+	//		case "start":
+	//			slog.LogAttrs(stream.Context(), slog.LevelInfo, "container started", slog.String("containerId", event.ID))
+	//		case "stop":
+	//			slog.LogAttrs(stream.Context(), slog.LevelInfo, "container stopped", slog.String("containerId", event.ID))
+	//		case "die":
+	//			slog.LogAttrs(stream.Context(), slog.LevelInfo, "container died", slog.String("containerId", event.ID))
+	//		}
+	//	case <-stream.Context().Done():
+	//		return stream.Context().Err()
+	//	}
+	//}
 
-	go func() {
-		err := s.agent.ContainerListener(stream.Context(), containerListenerResponseChan)
-		if err != nil {
-			s.logger.LogAttrs(stream.Context(), slog.LevelError, "error setting up events listener", slog.Any("error", err))
-		}
-	}()
-
-	for {
-		select {
-		case event := <-containerListenerResponseChan:
-			containerEvent := &protoAgent.ContainerListenerResponse{}
-			containerEvent.SetId(event.ID)
-			containerEvent.SetAction(event.Action)
-
-			if err := stream.Send(containerEvent); err != nil {
-				slog.LogAttrs(stream.Context(), slog.LevelError, "error sending container event",
-					slog.Any("error", err),
-					slog.String("containerID", event.ID),
-					slog.String("action", event.Action),
-				)
-				return err
-			}
-
-			switch event.Action {
-			case "create":
-				slog.LogAttrs(stream.Context(), slog.LevelInfo, "container created", slog.String("containerId", event.ID))
-			case "start":
-				slog.LogAttrs(stream.Context(), slog.LevelInfo, "container started", slog.String("containerId", event.ID))
-			case "stop":
-				slog.LogAttrs(stream.Context(), slog.LevelInfo, "container stopped", slog.String("containerId", event.ID))
-			case "die":
-				slog.LogAttrs(stream.Context(), slog.LevelInfo, "container died", slog.String("containerId", event.ID))
-			}
-		case <-stream.Context().Done():
-			return stream.Context().Err()
-		}
-	}
+	return nil
 }

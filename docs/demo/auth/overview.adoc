@@ -1,0 +1,49 @@
+= Service d'authentification
+include::../_attributes.adoc[]
+
+xref:../book.adoc[← Retour au sommaire]
+
+== Vue d'ensemble
+
+Le service gère les tokens JWT et délègue
+la vérification des identités à un provider externe.
+
+== Flux d'authentification
+
+[mermaid]
+....
+sequenceDiagram
+    participant C as Client
+    participant A as Auth Service
+    participant P as OIDC Provider
+    participant DB as Redis
+
+    C->>A: POST /login
+    A->>P: Vérifie credentials
+    P-->>A: Identity confirmée
+    A->>DB: Stocke session
+    A-->>C: JWT token
+....
+
+== Composants
+
+[cols="1,2,1"]
+|===
+| Composant | Rôle | Technologie
+
+| Auth Service
+| Point d'entrée, génère les JWT
+| Go / chi
+
+| OIDC Provider
+| Vérifie l'identité
+| Keycloak
+
+| Session Store
+| Stocke les refresh tokens
+| Redis
+|===
+
+NOTE: Les tokens expirent après 15 minutes.
+
+WARNING: Ne jamais logger le contenu du JWT en production.

@@ -1,0 +1,15 @@
+[mermaid]
+....
+mindmap
+    root((noyra))
+        supervisor
+            loadbalancer
+            service discovery
+            tls autorefresh
+            deployment config
+        pod
+            service
+            sidecar mtls
+        etcd
+        tui
+....

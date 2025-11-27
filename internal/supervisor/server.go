@@ -3,11 +3,18 @@ package supervisor
 import (
 	"bytes"
 	"context"
+	cryptoRand "crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/base64"
 	"encoding/binary"
+	"encoding/pem"
 	"fmt"
 	"log/slog"
+	"math/big"
 	"math/rand"
+	"net"
 	"os"
 	"strconv"
 	"strings"
@@ -22,6 +29,7 @@ import (
 	"blackprism.org/noyra/internal/agent"
 	"blackprism.org/noyra/internal/agent/component"
 	"blackprism.org/noyra/internal/etcd"
+	podmanComponent "blackprism.org/noyra/internal/podman/component"
 )
 
 type Config struct {
@@ -230,13 +238,29 @@ func (s *Supervisor) Run(ctx context.Context) error {
 	}
 
 	s.logger.LogAttrs(ctx, slog.LevelInfo, "supervisor starting")
+
+	errCert := generateCertificate(
+		os.Getenv("ETCD_CA_CERT"),
+		os.Getenv("ETCD_CA_KEY"),
+		os.Getenv("ETCD_SERVER_CERT"),
+		os.Getenv("ETCD_SERVER_KEY"),
+		os.Getenv("ETCD_CLIENT_CERT"),
+		os.Getenv("ETCD_CLIENT_KEY"),
+		s.logger,
+	)
+
+	if errCert != nil {
+		s.logger.LogAttrs(ctx, slog.LevelError, "error in cert generation", slog.Any("error", errCert))
+		return errCert
+	}
+
 	errEtcd := s.startEtcd(ctx)
 
 	if errEtcd != nil {
 		return oops.Wrapf(errEtcd, "supervisor can't start etcd")
 	}
 
-	errEnvoy := s.startEnvoy(ctx)
+	errEnvoy := s.startLoadbalancer(ctx)
 
 	if errEnvoy != nil {
 		return oops.Wrapf(errEtcd, "supervisor can't start envoy")
@@ -248,23 +272,29 @@ func (s *Supervisor) Run(ctx context.Context) error {
 	s.saveClusterState(ctx)
 	s.logger.LogAttrs(ctx, slog.LevelInfo, "deploying toc toc", slog.Int("services", len(s.config.Deployment)))
 
+	go func() {
+		s.observeCluster(ctx)
+	}()
+
 	for _, service := range s.config.Deployment {
 		s.logger.LogAttrs(ctx, slog.LevelInfo, "deploying service", slog.String("service", service.Name))
 		s.deployService(ctx, service)
 	}
 
-	s.resyncCluster(ctx)
-	s.observeCluster(ctx)
+	//s.resyncCluster(ctx)
 
-	return nil
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (s *Supervisor) saveClusterState(ctx context.Context) {
-	containerLists, err := s.agentService.ContainerList(ctx, false, nil, nil)
+	containerLists := s.agentService.ListContainers(ctx, true, nil)
 
-	if err != nil {
-		s.logger.LogAttrs(ctx, slog.LevelError, "error while calling ContainerList", slog.Any("error", err))
-	}
+	//if err != nil {
+	//	s.logger.LogAttrs(ctx, slog.LevelError, "error while calling ContainerList", slog.Any("error", err))
+	//}
 
 	for _, deploymentConfig := range s.config.Deployment {
 		readyContainers := 0
@@ -323,12 +353,13 @@ func (s *Supervisor) resyncCluster(ctx context.Context) error {
 
 func (s *Supervisor) observeCluster(ctx context.Context) error {
 	containerListenerResponseChan := make(chan component.ContainerListenerResponse, 1000)
-	err := s.agentService.ContainerListener(ctx, containerListenerResponseChan)
 
-	if err != nil {
-		s.logger.LogAttrs(ctx, slog.LevelError, "error while calling ContainerListener", slog.Any("error", err))
-		return err
-	}
+	//go func() {
+	//	err := s.agentService.ContainerListener(ctx, containerListenerResponseChan)
+	//	if err != nil {
+	//		s.logger.LogAttrs(ctx, slog.LevelError, "error setting up ContainerListener", slog.Any("error", err))
+	//	}
+	//}()
 
 	for {
 		select {
@@ -342,17 +373,16 @@ func (s *Supervisor) observeCluster(ctx context.Context) error {
 }
 
 func (s *Supervisor) deployService(ctx context.Context, deploymentConfig DeploymentConfig) {
-	containersList, err := s.agentService.ContainerList(
+	containersList := s.agentService.ListContainers(
 		ctx,
-		false,
-		nil,
-		map[string]string{"noyra.name": deploymentConfig.Name},
+		true,
+		map[string][]string{"noyra.name": {deploymentConfig.Name}},
 	)
 
-	if err != nil {
-		s.logger.LogAttrs(ctx, slog.LevelError, "failed to get containers", slog.Any("error", err))
-		return
-	}
+	//if err != nil {
+	//	s.logger.LogAttrs(ctx, slog.LevelError, "failed to get containers", slog.Any("error", err))
+	//	return
+	//}
 
 	containerToDeploy := max(deploymentConfig.Replicas-len(containersList), 0)
 
@@ -361,7 +391,7 @@ func (s *Supervisor) deployService(ctx context.Context, deploymentConfig Deploym
 		return
 	}
 
-	exposedPorts := make(map[uint32]string)
+	exposedPorts := make(map[uint16]string)
 
 	for _, portWithProtocol := range deploymentConfig.Expose {
 		port := strings.Split(portWithProtocol, "/")
@@ -370,18 +400,18 @@ func (s *Supervisor) deployService(ctx context.Context, deploymentConfig Deploym
 			port = append(port, "tcp")
 		}
 
-		portUint32, _ := strconv.Atoi(port[0])
+		portInt, _ := strconv.Atoi(port[0])
 
-		exposedPorts[uint32(portUint32)] = "tcp"
+		exposedPorts[uint16(portInt)] = "tcp"
 	}
 
 	for range containerToDeploy {
 		s.logger.LogAttrs(ctx, slog.LevelInfo, "starting to deploy container", slog.Any("name", deploymentConfig.Name))
 
-		containerStartRequest := component.ContainerRequest{
-			Image:        deploymentConfig.Image,
-			Name:         deploymentConfig.Name + "-" + ContainerNameHash(),
-			ExposedPorts: exposedPorts,
+		containerStartRequest := podmanComponent.ContainerRequest{
+			Image:  deploymentConfig.Image,
+			Name:   deploymentConfig.Name + "-" + ContainerNameHash(),
+			Expose: exposedPorts,
 			Labels: map[string]string{
 				"noyra.name":    deploymentConfig.Name,
 				"noyra.type":    deploymentConfig.Type,
@@ -390,88 +420,96 @@ func (s *Supervisor) deployService(ctx context.Context, deploymentConfig Deploym
 			},
 		}
 
-		errContainerStart := s.agentService.ContainerStart(ctx, containerStartRequest)
+		_, errContainerStart := s.agentService.ContainerCreate(ctx, containerStartRequest)
 		if errContainerStart != nil {
 			s.logger.LogAttrs(ctx, slog.LevelError, "failed to start container", slog.Any("error", errContainerStart))
 		}
 	}
 }
 
-func (s *Supervisor) startEnvoy(ctx context.Context) error {
-	containersList, errList := s.agentService.ContainerList(
+func (s *Supervisor) startLoadbalancer(ctx context.Context) error {
+	containersList := s.agentService.ListContainers(
 		ctx,
 		true,
-		nil,
-		map[string]string{"noyra.name": "noyra-envoy"},
+		map[string][]string{"label": {"noyra.name=noyra-loadbalancer"}},
 	)
 
-	if errList != nil {
-		slog.LogAttrs(ctx, slog.LevelError, "failed to get container", slog.Any("error", errList))
-	}
+	//if errList != nil {
+	//	slog.LogAttrs(ctx, slog.LevelError, "failed to get container", slog.Any("error", errList))
+	//}
 
 	if len(containersList) > 0 {
 		for _, container := range containersList {
 			if container.State == "running" {
-				s.logger.LogAttrs(ctx, slog.LevelInfo, "noyra envoy already running")
+				s.logger.LogAttrs(ctx, slog.LevelInfo, "noyra loadbalancer already running")
 				return nil
 			}
 
-			errResume := s.agentService.ContainerRemove(ctx, "noyra-envoy")
+			errResume := s.agentService.ContainerRemove(ctx, "noyra-loadbalancer")
 			if errResume != nil {
-				s.logger.LogAttrs(ctx, slog.LevelError, "failed to remove envoy", slog.Any("error", errResume))
+				s.logger.LogAttrs(ctx, slog.LevelError, "failed to remove loadbalancer", slog.Any("error", errResume))
 				return errResume
 			}
 		}
 	}
 
-	// @TODO heu a mettre en ENV
-	configPath := "/mnt/data/src/go/noyra/config/envoy.yaml"
+	containerPortMappingLb := component.ContainerPortMapping{}
+	containerPortMappingLb.ContainerPort = 7777
+	containerPortMappingLb.HostPort = 7777
 
-	containerMount := component.ContainerMount{}
-	containerMount.Destination = "/config.yaml"
-	containerMount.Type = "bind"
-	containerMount.Source = configPath
-	containerMount.Options = []string{"rbind", "ro"}
+	containerPortMappingLb2 := component.ContainerPortMapping{}
+	containerPortMappingLb2.ContainerPort = 7778
+	containerPortMappingLb2.HostPort = 7778
 
-	containerPortMapping := component.ContainerPortMapping{}
-	containerPortMapping.ContainerPort = 10000
-	containerPortMapping.HostPort = 10000
-
-	containerPortMapping2 := component.ContainerPortMapping{}
-	containerPortMapping2.ContainerPort = 19001
-	containerPortMapping2.HostPort = 19001
-
-	containerRequest := component.ContainerRequest{}
-	containerRequest.Image = "envoyproxy/envoy:distroless-v1.36-latest"
-	containerRequest.Name = "noyra-envoy"
-	containerRequest.Commands = []string{"-c", "/config.yaml", "--drain-time-s", "5"}
-	containerRequest.ExposedPorts = map[uint32]string{
-		10000: "tcp",
-		19001: "tcp",
+	containerRequestLb := podmanComponent.ContainerRequest{
+		Image: "noyra-loadbalancer",
+		Name:  "noyra-loadbalancer",
+		Expose: map[uint16]string{
+			7777:  "tcp",
+			7778:  "tcp",
+			50000: "tcp",
+		},
+		Networks: map[string]podmanComponent.ContainerRequestNetwork{
+			"noyra": {},
+		},
+		Labels: map[string]string{"noyra.name": "noyra-loadbalancer"},
+		Portmappings: []podmanComponent.ContainerRequestPortmapping{
+			{
+				ContainerPort: 7777,
+				HostPort:      7777,
+			},
+			{
+				ContainerPort: 7778,
+				HostPort:      7778,
+			},
+		},
 	}
-	containerRequest.Network = "noyra"
-	containerRequest.Labels = map[string]string{"noyra.name": "noyra-envoy"}
-	containerRequest.Mounts = []component.ContainerMount{containerMount}
-	containerRequest.PortMappings = []component.ContainerPortMapping{containerPortMapping, containerPortMapping2}
 
 	// Contact the server and print out its response.
-	timeoutCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
-	defer cancel()
-	err := s.agentService.ContainerStart(timeoutCtx, containerRequest)
-	if err != nil {
-		s.logger.LogAttrs(ctx, slog.LevelError, "could not start container", slog.Any("error", err))
-		return err
+	timeoutCtx2, cancel2 := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel2()
+	_, err2 := s.agentService.ContainerCreate(timeoutCtx2, containerRequestLb)
+	if err2 != nil {
+		s.logger.LogAttrs(ctx, slog.LevelError, "could not start container", slog.Any("error", err2))
+		return err2
+	}
+
+	errContainerStart := s.agentService.ContainerStart(ctx, "noyra-loadbalancer")
+
+	if errContainerStart != nil {
+		s.logger.LogAttrs(ctx, slog.LevelError, "could not start loadbalancer", slog.Any("error", errContainerStart))
+		return oops.Wrapf(errContainerStart, "could not start loadbalancer")
 	}
 
 	return nil
 }
 
 func (s *Supervisor) startEtcd(ctx context.Context) error {
-	containersList, errList := s.agentService.ContainerList(ctx, true, nil, map[string]string{"noyra.name": "noyra-etcd"})
+	containersList := s.agentService.ListContainers(ctx, true, map[string][]string{"label": {"noyra.name=noyra-etcd"}})
 
-	if errList != nil {
-		slog.LogAttrs(ctx, slog.LevelError, "failed to get container", slog.Any("error", errList))
-	}
+	//if errList != nil {
+	//	s.logger.LogAttrs(ctx, slog.LevelError, "failed to get container", slog.Any("error", errList))
+	//}
 
 	if len(containersList) > 0 {
 		for _, container := range containersList {
@@ -480,7 +518,7 @@ func (s *Supervisor) startEtcd(ctx context.Context) error {
 				return nil
 			}
 
-			errResume := s.agentService.ContainerResume(ctx, "noyra-etcd")
+			errResume := s.agentService.ContainerStart(ctx, "noyra-etcd")
 			if errResume != nil {
 				s.logger.LogAttrs(ctx, slog.LevelError, "failed to resume etcd", slog.Any("error", errResume))
 
@@ -492,47 +530,33 @@ func (s *Supervisor) startEtcd(ctx context.Context) error {
 		}
 	}
 
-	var mounts []component.ContainerMount
+	containerSupervisor, errInspect := s.agentService.InspectContainer(ctx, "noyra-supervisor")
 
-	containerMountEtcdCa := component.ContainerMount{
-		Destination: "/certs/etcd-ca.crt",
-		Type:        "bind",
-		Source:      s.etcdClient.GetCaCertFile(),
-		Options:     []string{"rbind", "ro"},
-	}
-	mounts = append(mounts, containerMountEtcdCa)
-
-	containerMountEtcdServerCert := component.ContainerMount{
-		Destination: "/certs/etcd-server.crt",
-		Type:        "bind",
-		Source:      s.etcdClient.GetServerCertFile(),
-		Options:     []string{"rbind", "ro"},
-	}
-	mounts = append(mounts, containerMountEtcdServerCert)
-
-	containerMountEtcdServerKey := component.ContainerMount{
-		Destination: "/certs/etcd-server.key",
-		Type:        "bind",
-		Source:      s.etcdClient.GetServerKeyFile(),
-		Options:     []string{"rbind", "ro"},
-	}
-	mounts = append(mounts, containerMountEtcdServerKey)
-
-	containerVolume := component.ContainerVolume{
-		Destination: "/bitnami/etcd/data",
-		Source:      "noyra-etcd-data",
-		Options:     []string{"U"},
+	if errInspect != nil {
+		return oops.Wrapf(errInspect, "failed to inspect container")
 	}
 
-	containerPortMapping := component.ContainerPortMapping{
-		ContainerPort: 2379,
-		HostPort:      2379,
+	var containerMount []podmanComponent.ContainerRequestMount
+	for _, m := range containerSupervisor.Mounts {
+		containerMount = append(
+			containerMount,
+			podmanComponent.ContainerRequestMount{
+				Destination: m.Destination,
+				Type:        "bind",
+				Source:      m.Source,
+				ReadOnly:    true,
+				BindOptions: podmanComponent.ContainerMountBindOptions{
+					NonRecursive: false,
+				},
+			},
+		)
 	}
 
-	startRequest := component.ContainerRequest{
-		Image:  "bitnami/etcd:3.5.21",
-		Name:   "noyra-etcd",
-		UserNS: true,
+	s.logger.LogAttrs(ctx, slog.LevelInfo, "noyra volumes", slog.Any("volumes", containerMount))
+
+	startRequest2 := podmanComponent.ContainerRequest{
+		Image: "bitnami/etcd:3.5.21",
+		Name:  "noyra-etcd",
 		Env: map[string]string{
 			"ALLOW_NONE_AUTHENTICATION":  "true",
 			"BITNAMI_DEBUG":              "true",
@@ -545,27 +569,46 @@ func (s *Supervisor) startEtcd(ctx context.Context) error {
 			"ETCD_CERT_FILE":             "/certs/etcd-server.crt",
 			"ETCD_KEY_FILE":              "/certs/etcd-server.key",
 		},
-		ExposedPorts: map[uint32]string{
-			2379: "tcp",
+		Networks: map[string]podmanComponent.ContainerRequestNetwork{
+			"noyra": {},
 		},
-		Network: "noyra",
 		Labels: map[string]string{
 			"noyra.name": "noyra-etcd",
 		},
-		Mounts:       mounts,
-		Volumes:      []component.ContainerVolume{containerVolume},
-		PortMappings: []component.ContainerPortMapping{containerPortMapping},
+		Mounts: containerMount,
+		Volumes: []podmanComponent.ContainerRequestVolume{
+			{
+				Name:    "noyra-etcd-data",
+				Dest:    "/bitnami/etcd/data",
+				Options: []string{"U"},
+			},
+		},
+		Portmappings: []podmanComponent.ContainerRequestPortmapping{
+			{
+				ContainerPort: 2379,
+				HostPort:      2379,
+			},
+		},
 	}
 
 	// Contact the server and print out its response.
 	timeoutCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
-	errContainerStart := s.agentService.ContainerStart(timeoutCtx, startRequest)
-	if errContainerStart != nil {
-		slog.LogAttrs(ctx, slog.LevelError, "could not start etcd", slog.Any("error", errContainerStart))
-		return oops.Wrapf(errList, "could not start etcd")
+	_, errContainerCreate := s.agentService.ContainerCreate(timeoutCtx, startRequest2)
+
+	if errContainerCreate != nil {
+		s.logger.LogAttrs(ctx, slog.LevelError, "could not create etcd", slog.Any("error", errContainerCreate))
+		return oops.Wrapf(errContainerCreate, "could not create etcd")
 	}
-	slog.LogAttrs(ctx, slog.LevelInfo, "container start response")
+
+	errContainerStart := s.agentService.ContainerStart(ctx, "noyra-etcd")
+
+	if errContainerStart != nil {
+		s.logger.LogAttrs(ctx, slog.LevelError, "could not start etcd", slog.Any("error", errContainerStart))
+		return oops.Wrapf(errContainerStart, "could not start etcd")
+	}
+
+	s.logger.LogAttrs(ctx, slog.LevelInfo, "container start response")
 
 	return nil
 }
@@ -593,4 +636,196 @@ func ContainerNameHash() string {
 	}
 
 	return string(b)
+}
+
+func generateCertificate(
+	caCertFile string,
+	caKeyFile string,
+	serverCertFile string,
+	serverKeyFile string,
+	clientCertFile string,
+	clientKeyFile string,
+	logger *slog.Logger,
+) error {
+	_, errCrt := os.Stat(caCertFile)
+	_, errKey := os.Stat(caKeyFile)
+
+	if errCrt == nil && errKey == nil {
+		logger.LogAttrs(context.Background(), slog.LevelInfo, "certificat found")
+		return nil
+	}
+
+	// Générer une nouvelle autorité de certification (CA) ou réutiliser l'existante
+	// Pour cet exemple, nous générons une nouvelle CA
+	ca := &x509.Certificate{
+		SerialNumber: big.NewInt(1654),
+		Subject: pkix.Name{
+			Organization: []string{"Blackprism Noyra"},
+			CommonName:   "Noyra etcd",
+		},
+		NotBefore:             time.Now(),
+		NotAfter:              time.Now().AddDate(10, 0, 0),
+		IsCA:                  true,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth},
+		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
+		BasicConstraintsValid: true,
+	}
+
+	caPrivKey, err := rsa.GenerateKey(cryptoRand.Reader, 4096)
+	if err != nil {
+		return err
+	}
+
+	caBytes, err := x509.CreateCertificate(cryptoRand.Reader, ca, ca, &caPrivKey.PublicKey, caPrivKey)
+	if err != nil {
+		logger.LogAttrs(
+			context.Background(),
+			slog.LevelInfo,
+			"CreateCertificate",
+			slog.Any("error", err),
+		)
+		return err
+	}
+
+	caPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caBytes})
+	caPrivKeyPEM := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(caPrivKey)})
+
+	if errCa := os.WriteFile(caCertFile, caPEM, 0644); errCa != nil {
+		logger.LogAttrs(
+			context.Background(),
+			slog.LevelInfo,
+			"WriteFile caCertFile",
+			slog.Any("error", errCa),
+			slog.String("caCertFile", caCertFile),
+		)
+		return errCa
+	}
+	if errCaPriv := os.WriteFile(caKeyFile, caPrivKeyPEM, 0600); errCaPriv != nil {
+		logger.LogAttrs(
+			context.Background(),
+			slog.LevelInfo,
+			"WriteFile caKeyFile",
+			slog.Any("error", errCaPriv),
+		)
+		return errCaPriv
+	}
+
+	// Générer un nouveau certificat serveur
+	serverCert := &x509.Certificate{
+		SerialNumber: big.NewInt(1659),
+		Subject: pkix.Name{
+			Organization: []string{"Blackprism Noyra"},
+			CommonName:   "localhost",
+		},
+		DNSNames:    []string{"localhost", "etcd"},
+		IPAddresses: []net.IP{net.ParseIP("127.0.0.1")},
+		NotBefore:   time.Now(),
+		NotAfter:    time.Now().AddDate(10, 0, 0),
+		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth},
+		KeyUsage:    x509.KeyUsageDigitalSignature,
+	}
+
+	serverPrivKey, err := rsa.GenerateKey(cryptoRand.Reader, 4096)
+	if err != nil {
+		logger.LogAttrs(
+			context.Background(),
+			slog.LevelInfo,
+			"GenerateKey",
+			slog.Any("error", err),
+		)
+		return err
+	}
+
+	serverBytes, err := x509.CreateCertificate(cryptoRand.Reader, serverCert, ca, &serverPrivKey.PublicKey, caPrivKey)
+	if err != nil {
+		logger.LogAttrs(
+			context.Background(),
+			slog.LevelInfo,
+			"CreateCertificate",
+			slog.Any("error", err),
+		)
+		return err
+	}
+
+	serverPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: serverBytes})
+	serverPrivKeyPEM := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(serverPrivKey)})
+
+	if errCrt := os.WriteFile(serverCertFile, serverPEM, 0644); errCrt != nil {
+		logger.LogAttrs(
+			context.Background(),
+			slog.LevelInfo,
+			"WriteFile serverCertFile",
+			slog.Any("error", errCrt),
+		)
+		return errCrt
+	}
+
+	if errPriv := os.WriteFile(serverKeyFile, serverPrivKeyPEM, 0600); errPriv != nil {
+		logger.LogAttrs(
+			context.Background(),
+			slog.LevelInfo,
+			"WriteFile serverKeyFile",
+			slog.Any("error", errPriv),
+		)
+		return errPriv
+	}
+
+	// Générer un nouveau certificat client
+	clientCert := &x509.Certificate{
+		SerialNumber: big.NewInt(1660),
+		Subject: pkix.Name{
+			Organization: []string{"Blackprism Noyra"},
+			CommonName:   "client",
+		},
+		NotBefore:   time.Now(),
+		NotAfter:    time.Now().AddDate(10, 0, 0),
+		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+		KeyUsage:    x509.KeyUsageDigitalSignature,
+	}
+
+	clientPrivKey, err := rsa.GenerateKey(cryptoRand.Reader, 4096)
+	if err != nil {
+		logger.LogAttrs(
+			context.Background(),
+			slog.LevelInfo,
+			"GenerateKey clientPrivKey",
+			slog.Any("error", err),
+		)
+		return err
+	}
+
+	clientBytes, err := x509.CreateCertificate(cryptoRand.Reader, clientCert, ca, &clientPrivKey.PublicKey, caPrivKey)
+	if err != nil {
+		logger.LogAttrs(
+			context.Background(),
+			slog.LevelInfo,
+			"CreateCertificate clientBytes",
+			slog.Any("error", err),
+		)
+		return err
+	}
+
+	clientPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: clientBytes})
+	clientPrivKeyPEM := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(clientPrivKey)})
+
+	if err := os.WriteFile(clientCertFile, clientPEM, 0644); err != nil {
+		logger.LogAttrs(
+			context.Background(),
+			slog.LevelInfo,
+			"WriteFile clientCertFile",
+			slog.Any("error", err),
+		)
+		return err
+	}
+	if err := os.WriteFile(clientKeyFile, clientPrivKeyPEM, 0600); err != nil {
+		logger.LogAttrs(
+			context.Background(),
+			slog.LevelInfo,
+			"WriteFile clientKeyFile",
+			slog.Any("error", err),
+		)
+		return err
+	}
+
+	return nil
 }

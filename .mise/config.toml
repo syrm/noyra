@@ -11,8 +11,38 @@ _.file = ".env"
 
 [tasks]
 generate="go generate ./..."
-lint="go run github.com/bufbuild/buf/cmd/buf@v1.58.0 lint"
+lint="buf lint"
+build="""
+podman build -t noyra-supervisor -f deployments/container/supervisor/Containerfile .
+podman build -t noyra-loadbalancer -f deployments/container/loadbalancer/Containerfile .
+"""
+
+# sudo usermod --add-subuids 100000-199999 srm
+# sudo usermod --add-subgids 100000-199999 srm
+
+run="""
+chmod -R g+w deployments/certs/*.crt
+chmod -R g+r deployments/certs/
+podman network create noyra --ignore
+podman run --network noyra --env-file .container.env --replace --name  noyra-supervisor \
+    --stop-timeout 0 \
+    --label noyra.name=noyra-supervisor \
+    --mount type=bind,source=config/config.cue,destination=/config/config.cue,readonly \
+    --mount type=bind,source=deployments/certs,destination=/certs \
+    --mount type=bind,source=/run/user/1000/podman/podman.sock,destination=/run/user/1000/podman/podman.sock \
+    noyra-supervisor
+"""
+
+dev="""
+GOEXPERIMENT=jsonv2 go run cmd/noyra/main.go | hl -P
+"""
+
+clean="""
+podman volume rm noyra-etcd-data
+podman network rm noyra
+"""
 
 [tools]
 "node" = "22"
 "npm:@musistudio/claude-code-router" = "latest"
+"buf" = "1.60"

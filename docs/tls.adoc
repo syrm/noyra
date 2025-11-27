@@ -1,0 +1,19 @@
+= TLS
+:toc:
+:icons: font
+
+- Le CA est généré par Noyra/Supervisor et stocké sur ma machine hôte.
+
+[mermaid]
+....
+---
+config:
+  theme: 'dark'
+---
+sequenceDiagram
+    Supervisor->>Supervisor: generate CA
+    Supervisor->>Service: deployed
+    Supervisor->>SideCarMTLS: deployed
+    Supervisor->>SideCarMTLS: push cert
+####
+....
