@@ -3,6 +3,7 @@ package component
 import "time"
 
 type Container struct {
+	ID     string            `json:"Id"`
 	State  string            `json:"State"`
 	Labels map[string]string `json:"Labels"`
 	Mounts []string          `json:"Mounts"`

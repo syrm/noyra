@@ -2,8 +2,8 @@
 ....
 mindmap
     root((noyra))
+        loadbalancer
         supervisor
-            loadbalancer
             service discovery
             tls autorefresh
             deployment config

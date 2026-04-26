@@ -1,0 +1,7 @@
+supervisor génère les vrais certs +
+↓ +
+podman cp → volume etcd  (bootstrap, une seule fois) +
+↓ +
+etcd démarre avec de vrais certs ✅ +
+↓ +
+rotation périodique via mTLS

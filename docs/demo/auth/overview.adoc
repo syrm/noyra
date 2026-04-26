@@ -27,7 +27,7 @@ sequenceDiagram
 
 == Composants
 
-[cols="1,2,1"]
+[cols="1,3,1"]
 |===
 | Composant | Rôle | Technologie
 

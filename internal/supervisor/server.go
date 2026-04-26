@@ -3,18 +3,11 @@ package supervisor
 import (
 	"bytes"
 	"context"
-	cryptoRand "crypto/rand"
-	"crypto/rsa"
-	"crypto/x509"
-	"crypto/x509/pkix"
 	"encoding/base64"
 	"encoding/binary"
-	"encoding/pem"
 	"fmt"
 	"log/slog"
-	"math/big"
 	"math/rand"
-	"net"
 	"os"
 	"strconv"
 	"strings"
@@ -229,7 +222,7 @@ func (s *Supervisor) loadConfig(configDir string) error {
 	return nil
 }
 
-func (s *Supervisor) Run(ctx context.Context) error {
+func (s *Supervisor) Run(ctx context.Context, certs map[string][]byte) error {
 	err := s.loadConfig(os.Getenv("NOYRA_CONFIG"))
 
 	if err != nil {
@@ -239,22 +232,7 @@ func (s *Supervisor) Run(ctx context.Context) error {
 
 	s.logger.LogAttrs(ctx, slog.LevelInfo, "supervisor starting")
 
-	errCert := generateCertificate(
-		os.Getenv("ETCD_CA_CERT"),
-		os.Getenv("ETCD_CA_KEY"),
-		os.Getenv("ETCD_SERVER_CERT"),
-		os.Getenv("ETCD_SERVER_KEY"),
-		os.Getenv("ETCD_CLIENT_CERT"),
-		os.Getenv("ETCD_CLIENT_KEY"),
-		s.logger,
-	)
-
-	if errCert != nil {
-		s.logger.LogAttrs(ctx, slog.LevelError, "error in cert generation", slog.Any("error", errCert))
-		return errCert
-	}
-
-	errEtcd := s.startEtcd(ctx)
+	errEtcd := s.startEtcd(ctx, certs)
 
 	if errEtcd != nil {
 		return oops.Wrapf(errEtcd, "supervisor can't start etcd")
@@ -504,7 +482,7 @@ func (s *Supervisor) startLoadbalancer(ctx context.Context) error {
 	return nil
 }
 
-func (s *Supervisor) startEtcd(ctx context.Context) error {
+func (s *Supervisor) startEtcd(ctx context.Context, certs map[string][]byte) error {
 	containersList := s.agentService.ListContainers(ctx, true, map[string][]string{"label": {"noyra.name=noyra-etcd"}})
 
 	//if errList != nil {
@@ -525,12 +503,12 @@ func (s *Supervisor) startEtcd(ctx context.Context) error {
 				return errResume
 			}
 
-			s.logger.LogAttrs(ctx, slog.LevelInfo, "noyra etcd resumed")
+			s.logger.LogAttrs(ctx, slog.LevelInfo, "noyra etcd resumed", slog.String("container_id", container.ID))
 			return nil
 		}
 	}
 
-	containerSupervisor, errInspect := s.agentService.InspectContainer(ctx, "noyra-supervisor")
+	/*containerSupervisor, errInspect := s.agentService.InspectContainer(ctx, "noyra-supervisor")
 
 	if errInspect != nil {
 		return oops.Wrapf(errInspect, "failed to inspect container")
@@ -550,9 +528,9 @@ func (s *Supervisor) startEtcd(ctx context.Context) error {
 				},
 			},
 		)
-	}
+	}*/
 
-	s.logger.LogAttrs(ctx, slog.LevelInfo, "noyra volumes", slog.Any("volumes", containerMount))
+	//s.logger.LogAttrs(ctx, slog.LevelInfo, "noyra volumes", slog.Any("volumes", containerMount))
 
 	startRequest2 := podmanComponent.ContainerRequest{
 		Image: "bitnami/etcd:3.5.21",
@@ -565,9 +543,9 @@ func (s *Supervisor) startEtcd(ctx context.Context) error {
 			"ETCD_LISTEN_CLIENT_URLS":    "https://0.0.0.0:2379",
 			"ETCD_ADVERTISE_CLIENT_URLS": "https://localhost:2379",
 			"ETCD_CLIENT_CERT_AUTH":      "true",
-			"ETCD_TRUSTED_CA_FILE":       "/certs/etcd-ca.crt",
-			"ETCD_CERT_FILE":             "/certs/etcd-server.crt",
-			"ETCD_KEY_FILE":              "/certs/etcd-server.key",
+			"ETCD_TRUSTED_CA_FILE":       "/certs/ca.pem",
+			"ETCD_CERT_FILE":             "/certs/etcd-server.pem",
+			"ETCD_KEY_FILE":              "/certs/etcd-server-key.pem",
 		},
 		Networks: map[string]podmanComponent.ContainerRequestNetwork{
 			"noyra": {},
@@ -575,11 +553,16 @@ func (s *Supervisor) startEtcd(ctx context.Context) error {
 		Labels: map[string]string{
 			"noyra.name": "noyra-etcd",
 		},
-		Mounts: containerMount,
+		//Mounts: containerMount,
 		Volumes: []podmanComponent.ContainerRequestVolume{
 			{
 				Name:    "noyra-etcd-data",
 				Dest:    "/bitnami/etcd/data",
+				Options: []string{"U"},
+			},
+			{
+				Name:    "noyra-etcd-certs",
+				Dest:    "/certs",
 				Options: []string{"U"},
 			},
 		},
@@ -599,6 +582,12 @@ func (s *Supervisor) startEtcd(ctx context.Context) error {
 	if errContainerCreate != nil {
 		s.logger.LogAttrs(ctx, slog.LevelError, "could not create etcd", slog.Any("error", errContainerCreate))
 		return oops.Wrapf(errContainerCreate, "could not create etcd")
+	}
+
+	errCopy := s.agentService.CopyFileToContainer(ctx, "noyra-etcd", certs, "/certs")
+
+	if errCopy != nil {
+		return oops.Wrapf(errCopy, "could not copy certs to container etcd")
 	}
 
 	errContainerStart := s.agentService.ContainerStart(ctx, "noyra-etcd")
@@ -636,196 +625,4 @@ func ContainerNameHash() string {
 	}
 
 	return string(b)
-}
-
-func generateCertificate(
-	caCertFile string,
-	caKeyFile string,
-	serverCertFile string,
-	serverKeyFile string,
-	clientCertFile string,
-	clientKeyFile string,
-	logger *slog.Logger,
-) error {
-	_, errCrt := os.Stat(caCertFile)
-	_, errKey := os.Stat(caKeyFile)
-
-	if errCrt == nil && errKey == nil {
-		logger.LogAttrs(context.Background(), slog.LevelInfo, "certificat found")
-		return nil
-	}
-
-	// Générer une nouvelle autorité de certification (CA) ou réutiliser l'existante
-	// Pour cet exemple, nous générons une nouvelle CA
-	ca := &x509.Certificate{
-		SerialNumber: big.NewInt(1654),
-		Subject: pkix.Name{
-			Organization: []string{"Blackprism Noyra"},
-			CommonName:   "Noyra etcd",
-		},
-		NotBefore:             time.Now(),
-		NotAfter:              time.Now().AddDate(10, 0, 0),
-		IsCA:                  true,
-		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth},
-		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
-		BasicConstraintsValid: true,
-	}
-
-	caPrivKey, err := rsa.GenerateKey(cryptoRand.Reader, 4096)
-	if err != nil {
-		return err
-	}
-
-	caBytes, err := x509.CreateCertificate(cryptoRand.Reader, ca, ca, &caPrivKey.PublicKey, caPrivKey)
-	if err != nil {
-		logger.LogAttrs(
-			context.Background(),
-			slog.LevelInfo,
-			"CreateCertificate",
-			slog.Any("error", err),
-		)
-		return err
-	}
-
-	caPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caBytes})
-	caPrivKeyPEM := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(caPrivKey)})
-
-	if errCa := os.WriteFile(caCertFile, caPEM, 0644); errCa != nil {
-		logger.LogAttrs(
-			context.Background(),
-			slog.LevelInfo,
-			"WriteFile caCertFile",
-			slog.Any("error", errCa),
-			slog.String("caCertFile", caCertFile),
-		)
-		return errCa
-	}
-	if errCaPriv := os.WriteFile(caKeyFile, caPrivKeyPEM, 0600); errCaPriv != nil {
-		logger.LogAttrs(
-			context.Background(),
-			slog.LevelInfo,
-			"WriteFile caKeyFile",
-			slog.Any("error", errCaPriv),
-		)
-		return errCaPriv
-	}
-
-	// Générer un nouveau certificat serveur
-	serverCert := &x509.Certificate{
-		SerialNumber: big.NewInt(1659),
-		Subject: pkix.Name{
-			Organization: []string{"Blackprism Noyra"},
-			CommonName:   "localhost",
-		},
-		DNSNames:    []string{"localhost", "etcd"},
-		IPAddresses: []net.IP{net.ParseIP("127.0.0.1")},
-		NotBefore:   time.Now(),
-		NotAfter:    time.Now().AddDate(10, 0, 0),
-		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth},
-		KeyUsage:    x509.KeyUsageDigitalSignature,
-	}
-
-	serverPrivKey, err := rsa.GenerateKey(cryptoRand.Reader, 4096)
-	if err != nil {
-		logger.LogAttrs(
-			context.Background(),
-			slog.LevelInfo,
-			"GenerateKey",
-			slog.Any("error", err),
-		)
-		return err
-	}
-
-	serverBytes, err := x509.CreateCertificate(cryptoRand.Reader, serverCert, ca, &serverPrivKey.PublicKey, caPrivKey)
-	if err != nil {
-		logger.LogAttrs(
-			context.Background(),
-			slog.LevelInfo,
-			"CreateCertificate",
-			slog.Any("error", err),
-		)
-		return err
-	}
-
-	serverPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: serverBytes})
-	serverPrivKeyPEM := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(serverPrivKey)})
-
-	if errCrt := os.WriteFile(serverCertFile, serverPEM, 0644); errCrt != nil {
-		logger.LogAttrs(
-			context.Background(),
-			slog.LevelInfo,
-			"WriteFile serverCertFile",
-			slog.Any("error", errCrt),
-		)
-		return errCrt
-	}
-
-	if errPriv := os.WriteFile(serverKeyFile, serverPrivKeyPEM, 0600); errPriv != nil {
-		logger.LogAttrs(
-			context.Background(),
-			slog.LevelInfo,
-			"WriteFile serverKeyFile",
-			slog.Any("error", errPriv),
-		)
-		return errPriv
-	}
-
-	// Générer un nouveau certificat client
-	clientCert := &x509.Certificate{
-		SerialNumber: big.NewInt(1660),
-		Subject: pkix.Name{
-			Organization: []string{"Blackprism Noyra"},
-			CommonName:   "client",
-		},
-		NotBefore:   time.Now(),
-		NotAfter:    time.Now().AddDate(10, 0, 0),
-		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
-		KeyUsage:    x509.KeyUsageDigitalSignature,
-	}
-
-	clientPrivKey, err := rsa.GenerateKey(cryptoRand.Reader, 4096)
-	if err != nil {
-		logger.LogAttrs(
-			context.Background(),
-			slog.LevelInfo,
-			"GenerateKey clientPrivKey",
-			slog.Any("error", err),
-		)
-		return err
-	}
-
-	clientBytes, err := x509.CreateCertificate(cryptoRand.Reader, clientCert, ca, &clientPrivKey.PublicKey, caPrivKey)
-	if err != nil {
-		logger.LogAttrs(
-			context.Background(),
-			slog.LevelInfo,
-			"CreateCertificate clientBytes",
-			slog.Any("error", err),
-		)
-		return err
-	}
-
-	clientPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: clientBytes})
-	clientPrivKeyPEM := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(clientPrivKey)})
-
-	if err := os.WriteFile(clientCertFile, clientPEM, 0644); err != nil {
-		logger.LogAttrs(
-			context.Background(),
-			slog.LevelInfo,
-			"WriteFile clientCertFile",
-			slog.Any("error", err),
-		)
-		return err
-	}
-	if err := os.WriteFile(clientKeyFile, clientPrivKeyPEM, 0600); err != nil {
-		logger.LogAttrs(
-			context.Background(),
-			slog.LevelInfo,
-			"WriteFile clientKeyFile",
-			slog.Any("error", err),
-		)
-		return err
-	}
-
-	return nil
 }

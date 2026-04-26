@@ -1,6 +1,8 @@
 package podman
 
 import (
+	"archive/tar"
+	"bytes"
 	"context"
 	"encoding/json/v2"
 	"fmt"
@@ -284,6 +286,8 @@ func (client *Client) ListContainers(
 		return nil, localOops.Wrap(errGet)
 	}
 
+	defer resp.Body.Close()
+
 	errHandleError := handleErrorResponse(localOops, resp)
 
 	if errHandleError != nil {
@@ -424,7 +428,7 @@ func (client *Client) RemoveContainer(ctx context.Context, name string) error {
 }
 
 func (client *Client) CreateContainer(ctx context.Context, container component.ContainerRequest) (string, error) {
-	localOops := oops.In("create_container").With("name", container.Name)
+	localOops := oops.In("CreateContainer").With("name", container.Name)
 
 	// @TODO a deplacer c'est pas sa responsabilité
 	container.Netns = component.ContainerRequestNetns{
@@ -453,8 +457,6 @@ func (client *Client) CreateContainer(ctx context.Context, container component.C
 	if errMarshal != nil {
 		return "", localOops.Wrap(errMarshal)
 	}
-
-	println(string(containerJSON))
 
 	req, errReq := http.NewRequestWithContext(
 		ctx,
@@ -498,6 +500,63 @@ func (client *Client) CreateContainer(ctx context.Context, container component.C
 	}
 
 	return createResponse.ID, nil
+}
+
+func (client *Client) CopyFileToContainer(
+	ctx context.Context,
+	name string,
+	destDir string,
+	files map[string][]byte,
+) error {
+	localOops := oops.In("CopyFileToContainer").With("name", name)
+
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	defer tw.Close()
+
+	for filename, data := range files {
+		errHeader := tw.WriteHeader(&tar.Header{
+			Name: filename,
+			Mode: 0600,
+			Size: int64(len(data)),
+		})
+
+		if errHeader != nil {
+			return oops.With("file", filename).Wrapf(errHeader, "failed to write tar header")
+		}
+
+		_, errData := tw.Write(data)
+
+		if errData != nil {
+			return oops.With("file", filename).Wrapf(errData, "failed to write tar data")
+		}
+	}
+	errClose := tw.Close()
+
+	if errClose != nil {
+		return oops.Wrapf(errClose, "failed to close tar")
+	}
+
+	req, errReq := http.NewRequestWithContext(
+		ctx,
+		http.MethodPut,
+		getPodmanEndpoint()+"/containers/"+name+"/archive?path="+url.QueryEscape(destDir),
+		&buf,
+	)
+
+	if errReq != nil {
+		return localOops.Wrapf(errReq, "request")
+	}
+
+	resp, errPut := client.httpClient.Do(req)
+
+	if errPut != nil {
+		return localOops.Wrap(errPut)
+	}
+
+	resp.Body.Close()
+
+	return nil
 }
 
 func handleErrorResponse(localOops oops.OopsErrorBuilder, resp *http.Response) error {

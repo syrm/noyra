@@ -3,6 +3,7 @@ package component
 import "time"
 
 type ContainerInspected struct {
+	ID     string                    `json:"Id"`
 	Mounts []ContainerInspectedMount `json:"Mounts"`
 }
 

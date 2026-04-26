@@ -21,8 +21,6 @@ podman build -t noyra-loadbalancer -f deployments/container/loadbalancer/Contain
 # sudo usermod --add-subgids 100000-199999 srm
 
 run="""
-chmod -R g+w deployments/certs/*.crt
-chmod -R g+r deployments/certs/
 podman network create noyra --ignore
 podman run --network noyra --env-file .container.env --replace --name  noyra-supervisor \
     --stop-timeout 0 \

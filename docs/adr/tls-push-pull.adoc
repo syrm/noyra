@@ -3,7 +3,7 @@
 :icons: font
 
 ===== Décision
-Push
+Pull
 
 ==== Push ou Pull pour les sidecars ?
 ===== Pattern 1 : Push (le supervisor envoie les certs)
@@ -38,5 +38,6 @@ Si tu contrôles l'infra et les sidecars sont connus → push plus simple
 Si tu as un environnement dynamique avec des sidecars qui arrivent/partent → pull plus adapté
 
 ====== Conclusion
-Le supervisor de Noyra étant chargé du déploiement et du scaling des pods, il contrôle l'infra
-et de plus la solution push étant plus simple, on part sur la solution push.
+On préfère les avantages du pull.
+Concernant la révocation des certificats, on met une expiration très courte
+Pour l'auth de départ on utilise un JWT one-time

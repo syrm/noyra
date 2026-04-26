@@ -17,6 +17,7 @@ import (
 	"blackprism.org/noyra/internal/etcd"
 	"blackprism.org/noyra/internal/podman"
 	"blackprism.org/noyra/internal/supervisor"
+	"blackprism.org/noyra/internal/tlsrefresher"
 )
 
 func main() {
@@ -48,18 +49,12 @@ func main() {
 		os.Exit(1)
 	}
 
-	client := podman.BuildClient("/run/user/1000/podman/podman.sock", logger)
 	//errLI := client.ListImages(ctx)
 	//
 	//if errLI != nil {
 	//	logger.LogAttrs(ctx, slog.LevelError, "error list images", slog.Any("error", errLI))
 	//}
 	//client.PullImage(ctx, "memcached")
-	errA := client.StopContainer(ctx, "214c28dd55eb")
-
-	if errA != nil {
-		logger.LogAttrs(ctx, slog.LevelError, "unable to stop container", slog.Any("error", errA))
-	}
 
 	if os.Getenv("NOYRA_CONFIG") == "" {
 		logger.LogAttrs(context.Background(), slog.LevelError, "NOYRA_CONFIG env var is not set")
@@ -76,9 +71,11 @@ func main() {
 		return ds.Run(errgrpCtx)
 	})
 
-	// for {
-	// 	time.Sleep(1 * time.Second)
-	// }
+	tlsGenerator := tlsrefresher.BuildService("/certs", logger)
+	errTls := tlsGenerator.Run()
+	if errTls != nil {
+		logger.LogAttrs(ctx, slog.LevelError, "unable to generate TLS", slog.Any("error", errTls))
+	}
 
 	etcdClient, errEtcd := etcd.BuildEtcdClient(
 		ctx,
@@ -99,8 +96,15 @@ func main() {
 	supervisorServer := supervisor.BuildSupervisor(agentService, etcdClient, config.Schema, logger)
 	//apiServer := api.BuildAPIServer(etcdClient, logger)
 
+	certs, errCerts := tlsGenerator.GetCertificatesForEtcd()
+
+	if errCerts != nil {
+		logger.LogAttrs(ctx, slog.LevelError, "unable to get certificates for etcd", slog.Any("error", errCerts))
+		os.Exit(1)
+	}
+
 	errgrp.Go(func() error {
-		return supervisorServer.Run(errgrpCtx)
+		return supervisorServer.Run(errgrpCtx, certs)
 	})
 
 	//errgrp.Go(func() error {

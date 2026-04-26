@@ -1,7 +1,6 @@
 package tlsrefresher
 
 import (
-	"context"
 	"crypto"
 	"crypto/ed25519"
 	cryptoRand "crypto/rand"
@@ -30,33 +29,57 @@ const etcdClientCertFile = "etcd-client.pem"
 const etcdClientKeyFile = "etcd-client-key.pem"
 
 type Certificates struct {
-	CaCert     x509.Certificate
-	CaKey      crypto.PrivateKey
-	ServerCert x509.Certificate
-	ServerKey  crypto.PrivateKey
-	ClientCert x509.Certificate
-	ClientKey  crypto.PrivateKey
+	caCert         x509.Certificate
+	caKey          crypto.PrivateKey
+	etcdServerCert x509.Certificate
+	etcdServerKey  crypto.PrivateKey
+	etcdClientCert x509.Certificate
+	etcdClientKey  crypto.PrivateKey
 }
 
 type Service struct {
 	certs       Certificates
-	storagePath fs.DirEntry
+	storagePath string
 	logger      *slog.Logger
 }
 
-func BuildService(storagePath fs.DirEntry, logger *slog.Logger) *Service {
+func BuildService(storagePath string, logger *slog.Logger) *Service {
 	return &Service{
 		storagePath: storagePath,
 		logger:      logger,
 	}
 }
 
-func (s *Service) Run(ctx context.Context) error {
+func (s *Service) Run() error {
+	errCA := s.generateCACertificate()
+	if errCA != nil {
+		return errCA
+	}
+
+	errCerts := s.generateCertificates()
+	if errCerts != nil {
+		return errCerts
+	}
+
 	return nil
 }
 
+func (s *Service) GetCertificatesForEtcd() (map[string][]byte, error) {
+	keyBytes, errBytes := s.keyToBytes(s.certs.etcdServerKey)
+
+	if errBytes != nil {
+		return nil, oops.Wrapf(errBytes, "failed to generate bytes from key")
+	}
+
+	return map[string][]byte{
+		caCertFile:         s.certToBytes(s.certs.caCert),
+		etcdServerCertFile: s.certToBytes(s.certs.etcdServerCert),
+		etcdServerKeyFile:  keyBytes,
+	}, nil
+}
+
 func (s *Service) loadCert(file string) (x509.Certificate, error) {
-	data, errRead := os.ReadFile(s.storagePath.Name() + "/" + file)
+	data, errRead := os.ReadFile(s.storagePath + "/" + file)
 	if errRead != nil {
 		return x509.Certificate{}, oops.With("file", file).Wrapf(errRead, "failed to read file")
 	}
@@ -75,7 +98,7 @@ func (s *Service) loadCert(file string) (x509.Certificate, error) {
 }
 
 func (s *Service) loadKey(file string) (crypto.PrivateKey, error) {
-	data, errRead := os.ReadFile(s.storagePath.Name() + "/" + file)
+	data, errRead := os.ReadFile(s.storagePath + "/" + file)
 	if errRead != nil {
 		return nil, oops.With("file", file).Wrapf(errRead, "failed to read file")
 	}
@@ -93,25 +116,39 @@ func (s *Service) loadKey(file string) (crypto.PrivateKey, error) {
 	return key, nil
 }
 
-func (s *Service) saveCert(cert x509.Certificate, file string) error {
-	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: cert.Raw})
+func (s *Service) certToBytes(cert x509.Certificate) []byte {
+	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: cert.Raw})
+}
 
-	if err := os.WriteFile(s.storagePath.Name()+"/"+file, certPEM, 0600); err != nil {
+func (s *Service) saveCert(cert x509.Certificate, file string) error {
+	certPEM := s.certToBytes(cert)
+
+	if err := os.WriteFile(s.storagePath+"/"+file, certPEM, 0600); err != nil {
 		return oops.With("file", file).Wrapf(err, "failed to write cert file")
 	}
 
 	return nil
 }
 
-func (s *Service) saveKey(key crypto.PrivateKey, file string) error {
+func (s *Service) keyToBytes(key crypto.PrivateKey) ([]byte, error) {
 	keyDER, errMarshal := x509.MarshalPKCS8PrivateKey(key)
 	if errMarshal != nil {
-		return oops.With("file", file).Wrapf(errMarshal, "failed to marshal key")
+		return nil, oops.Wrapf(errMarshal, "failed to marshal key")
 	}
 
 	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
 
-	if err := os.WriteFile(s.storagePath.Name()+"/"+file, keyPEM, 0600); err != nil {
+	return keyPEM, nil
+}
+
+func (s *Service) saveKey(key crypto.PrivateKey, file string) error {
+	keyPEM, errToBytes := s.keyToBytes(key)
+
+	if errToBytes != nil {
+		return oops.With("file", file).Wrapf(errToBytes, "failed to transfom key to bytes")
+	}
+
+	if err := os.WriteFile(s.storagePath+"/"+file, keyPEM, 0600); err != nil {
 		return oops.With("file", file).Wrapf(err, "failed to write key file")
 	}
 
@@ -136,8 +173,8 @@ func (s *Service) generateCACertificate() error {
 	}
 
 	if errLoadCert == nil && errLoadKey == nil {
-		s.certs.CaCert = caCert
-		s.certs.CaKey = caKey
+		s.certs.caCert = caCert
+		s.certs.caKey = caKey
 
 		return nil
 	}
@@ -162,17 +199,17 @@ func (s *Service) generateCACertificate() error {
 		return oops.Wrapf(errCA, "can't generate ca certificate")
 	}
 
-	s.certs.CaCert = caCert
-	s.certs.CaKey = caKey
+	s.certs.caCert = caCert
+	s.certs.caKey = caKey
 
-	errSaveCaCert := s.saveCert(s.certs.CaCert, caCertFile)
+	errSaveCaCert := s.saveCert(s.certs.caCert, caCertFile)
 	if errSaveCaCert != nil {
 		return oops.
 			With("file", caCertFile).
 			Wrapf(errSaveCaCert, "can't save CA certificate")
 	}
 
-	errSaveCaKey := s.saveKey(s.certs.CaKey, caKeyFile)
+	errSaveCaKey := s.saveKey(s.certs.caKey, caKeyFile)
 	if errSaveCaKey != nil {
 		return oops.
 			With("file", caKeyFile).
@@ -191,24 +228,24 @@ func (s *Service) generateCertificates() error {
 	serverTemplate, errServer := s.generateCertificate(
 		false,
 		caCertName+" etcd",
-		[]x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		[]x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth},
 		x509.KeyUsageDigitalSignature,
 		[]string{"localhost", "etcd"},
 		[]net.IP{net.ParseIP("127.0.0.1")},
-		30*24*time.Hour,
+		1*time.Hour,
 	)
 	if errServer != nil {
 		return oops.Wrapf(errServer, "can't generate etcd server certificate")
 	}
 
-	serverCert, serverKey, errServerCert := s.generateSignedCertificate(serverTemplate, s.certs.CaCert, s.certs.CaKey)
+	serverCert, serverKey, errServerCert := s.generateSignedCertificate(serverTemplate, s.certs.caCert, s.certs.caKey)
 
 	if errServerCert != nil {
 		return oops.Wrapf(errServerCert, "can't generate etcd server certificate")
 	}
 
-	s.certs.ServerCert = serverCert
-	s.certs.ServerKey = serverKey
+	s.certs.etcdServerCert = serverCert
+	s.certs.etcdServerKey = serverKey
 
 	errSaveServerCert := s.saveCert(serverCert, etcdServerCertFile)
 	if errSaveServerCert != nil {
@@ -236,14 +273,14 @@ func (s *Service) generateCertificates() error {
 		return oops.Wrapf(errClient, "can't generate etcd client certificate")
 	}
 
-	clientCert, clientKey, errClientCert := s.generateSignedCertificate(clientTemplate, s.certs.CaCert, s.certs.CaKey)
+	clientCert, clientKey, errClientCert := s.generateSignedCertificate(clientTemplate, s.certs.caCert, s.certs.caKey)
 
 	if errClientCert != nil {
 		return oops.Wrapf(errClientCert, "can't generate etcd client certificate")
 	}
 
-	s.certs.ClientCert = clientCert
-	s.certs.ClientKey = clientKey
+	s.certs.etcdClientCert = clientCert
+	s.certs.etcdClientKey = clientKey
 
 	errSaveClientCert := s.saveCert(clientCert, etcdClientCertFile)
 	if errSaveClientCert != nil {

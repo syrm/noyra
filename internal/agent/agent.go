@@ -43,12 +43,12 @@ func (a *Agent) InspectContainer(ctx context.Context, name string) (podmanCompon
 	//	return errCreate
 	//}
 
-	a.logger.LogAttrs(ctx, slog.LevelInfo, "container started", slog.String("name", name))
-
 	container, err := a.podmanClient.InspectContainer(ctx, name)
 	if err != nil {
 		return podmanComponent.ContainerInspected{}, err
 	}
+
+	a.logger.LogAttrs(ctx, slog.LevelInfo, "container inspect", slog.String("name", name), slog.String("container_id", container.ID))
 
 	return container, nil
 }
@@ -127,38 +127,31 @@ func (a *Agent) ContainerCreate(ctx context.Context, containerRequest podmanComp
 	//	return errCreate
 	//}
 
-	a.logger.LogAttrs(ctx, slog.LevelInfo, "container started", slog.String("name", containerRequest.Name))
-
 	id, errStart := a.podmanClient.CreateContainer(ctx, containerRequest)
 	if errStart != nil {
 		return "", errStart
 	}
 
+	a.logger.LogAttrs(ctx, slog.LevelInfo, "container started", slog.String("name", containerRequest.Name), slog.String("container_id", id))
+
 	return id, nil
 }
 
 func (a *Agent) ContainerStart(ctx context.Context, name string) error {
-	//errPull := a.podmanClient.PullImage(ctx, containerRequest.Image)
-	//
-	//if errPull != nil {
-	//	return errPull
-	//}
-	//
-	//if err := a.createNetwork(ctx); err != nil {
-	//	return err
-	//}
-	//
-	//containerID, errCreate := a.podmanClient.CreateContainer(ctx, containerRequest)
-	//
-	//if errCreate != nil {
-	//	return errCreate
-	//}
-
-	a.logger.LogAttrs(ctx, slog.LevelInfo, "container started", slog.String("name", name))
-
 	errStart := a.podmanClient.StartContainer(ctx, name)
 	if errStart != nil {
 		return errStart
+	}
+
+	a.logger.LogAttrs(ctx, slog.LevelInfo, "container started", slog.String("name", name), slog.String("container_id", name))
+
+	return nil
+}
+
+func (a *Agent) CopyFileToContainer(ctx context.Context, name string, files map[string][]byte, destDir string) error {
+	errCopy := a.podmanClient.CopyFileToContainer(ctx, name, destDir, files)
+	if errCopy != nil {
+		return oops.With("name", name).Wrapf(errCopy, "failed to copy files to container")
 	}
 
 	return nil
