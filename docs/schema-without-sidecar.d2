@@ -1,0 +1,90 @@
+vars: {
+  d2-config: {
+    layout-engine: elk
+  }
+  d2-legend: {
+    noyra: {
+      label: Noyra
+      style: {
+        fill: "#99cccc"
+      }
+    }
+    podman: {
+      label: Podman
+      style: {
+        stroke: "#cc0000"
+      }
+    }
+  }
+}
+
+classes: {
+  noyra: {
+    style: {
+      fill: "#99cccc"
+    }
+  }
+  podman: {
+    style: {
+      stroke: "#cc0000"
+    }
+  }
+  healthcheck: {
+    style: {
+      stroke: "#33cc33"
+    }
+  }
+  dashed: {
+    style: {
+      stroke-dash: 3
+    }
+  }
+  invisible: {
+    style: {
+      opacity: 0
+    }
+  }
+}
+
+Client
+
+NoyraLB: "Loadbalancer HTTPS"
+NoyraLB.class: [noyra; podman]
+NoyraLB -> NoyraS: {class: invisible}
+
+Client -> NoyraLB: HTTPS
+
+Pod1: "Pod 1"
+Pod1.class: podman
+Pod1.ServerHTTP: "Server HTTP"
+
+Pod2: "Pod 2"
+Pod2.class: podman
+Pod2.ServerHTTP: "Server HTTP"
+
+Pod3: "Pod 3"
+Pod3.class:  [dashed; podman]
+Pod3.ServerHTTP: "Server HTTP"
+
+NoyraS: "Supervisor (stateless)"
+NoyraS.class: noyra
+
+NoyraLB -> Pod1.ServerHTTP: mTLS
+NoyraLB -> Pod2.ServerHTTP: mTLS
+NoyraLB -> Pod3.ServerHTTP: {class: invisible}
+
+NoyraS -> Pod1.ServerHTTP: renew mTLS (mTLS)
+NoyraS -> Pod2.ServerHTTP: renew mTLS (mTLS)
+NoyraS -> Pod3.ServerHTTP: {class: invisible}
+
+NoyraS -> Pod1.ServerHTTP: health check (mTLS) {class: healthcheck}
+NoyraS -> Pod2.ServerHTTP: health check (mTLS) {class: healthcheck}
+
+
+NoyraS -> Pod3: schedule create
+
+NoyraS -> NoyraLB: info about health check (mTLS)
+
+Etcd.class: podman
+
+NoyraS -> Etcd

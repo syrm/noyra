@@ -41,12 +41,16 @@ type Service struct {
 	certs       Certificates
 	storagePath string
 	logger      *slog.Logger
+	newCert     chan bool
 }
 
 func BuildService(storagePath string, logger *slog.Logger) *Service {
+	newCert := make(chan bool, 1)
+
 	return &Service{
 		storagePath: storagePath,
 		logger:      logger,
+		newCert:     newCert,
 	}
 }
 
@@ -60,6 +64,49 @@ func (s *Service) Run() error {
 	if errCerts != nil {
 		return errCerts
 	}
+
+	return nil
+}
+
+func (s *Service) RotateHandler() {
+	certsSorted := []x509.Certificate{} // tous les certs
+
+	var cert x509.Certificate
+	for {
+		cert, certsSorted = certsSorted[len(certsSorted)-1], certsSorted[:len(certsSorted)-1]
+		renewAt := cert.NotAfter.Add(-(cert.NotAfter.Sub(cert.NotBefore) / 3))
+
+		if s.worker(renewAt) == false {
+			// on refait le sort avec tous les certs y compris le nouveau
+			certsSorted = []x509.Certificate{}
+		} else {
+			// cert renouvelé → le remettre dans la liste avec la nouvelle expiration
+			//newCert := s.renew(cert)
+			//certsSorted = insertSorted(certsSorted, newCert)
+		}
+	}
+}
+
+func (s *Service) worker(renewAt time.Time) bool {
+	timer := time.NewTimer(time.Until(renewAt))
+	defer timer.Stop()
+
+	select {
+	case <-timer.C:
+		// renew
+
+		return true
+	case <-s.newCert:
+		return false
+	}
+}
+
+func (s *Service) addCertificate(cert *x509.Certificate) error {
+	// process to include new cert
+	// ...
+	// ...
+
+	s.newCert <- true
 
 	return nil
 }

@@ -4,7 +4,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"context"
-	"encoding/json/v2"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -452,7 +452,7 @@ func (client *Client) CreateContainer(ctx context.Context, container component.C
 	//	containerSecurityConfig.UserNS = specgen.Namespace{NSMode: specgen.KeepID}
 	//}
 
-	containerJSON, errMarshal := json.Marshal(container, json.OmitZeroStructFields(true))
+	containerJSON, errMarshal := json.Marshal(container)
 
 	if errMarshal != nil {
 		return "", localOops.Wrap(errMarshal)

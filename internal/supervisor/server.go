@@ -244,6 +244,8 @@ func (s *Supervisor) Run(ctx context.Context, certs map[string][]byte) error {
 		return oops.Wrapf(errEtcd, "supervisor can't start envoy")
 	}
 
+	s.startSidecar(ctx)
+
 	// @TODO attention etcd n'a pas encore été démarré
 	time.Sleep(5 * time.Second)
 
@@ -354,7 +356,7 @@ func (s *Supervisor) deployService(ctx context.Context, deploymentConfig Deploym
 	containersList := s.agentService.ListContainers(
 		ctx,
 		true,
-		map[string][]string{"noyra.name": {deploymentConfig.Name}},
+		map[string][]string{"label": {"noyra.name=" + deploymentConfig.Name}},
 	)
 
 	//if err != nil {
@@ -403,6 +405,61 @@ func (s *Supervisor) deployService(ctx context.Context, deploymentConfig Deploym
 			s.logger.LogAttrs(ctx, slog.LevelError, "failed to start container", slog.Any("error", errContainerStart))
 		}
 	}
+}
+
+// poc
+func (s *Supervisor) startSidecar(ctx context.Context) error {
+	containersList := s.agentService.ListContainers(
+		ctx,
+		true,
+		map[string][]string{"label": {"noyra.name=noyra-sidecar"}},
+	)
+
+	//if errList != nil {
+	//	slog.LogAttrs(ctx, slog.LevelError, "failed to get container", slog.Any("error", errList))
+	//}
+
+	if len(containersList) > 0 {
+		for _, container := range containersList {
+			if container.State == "running" {
+				s.logger.LogAttrs(ctx, slog.LevelInfo, "noyra sidecar already running")
+				return nil
+			}
+
+			errResume := s.agentService.ContainerRemove(ctx, "noyra-sidecar")
+			if errResume != nil {
+				s.logger.LogAttrs(ctx, slog.LevelError, "failed to remove sidecar", slog.Any("error", errResume))
+				return errResume
+			}
+		}
+	}
+
+	containerRequest := podmanComponent.ContainerRequest{
+		Image: "noyra-sidecar",
+		Name:  "noyra-sidecar",
+		Networks: map[string]podmanComponent.ContainerRequestNetwork{
+			"noyra": {},
+		},
+		Labels: map[string]string{"noyra.name": "noyra-sidecar"},
+	}
+
+	// Contact the server and print out its response.
+	timeoutCtx2, cancel2 := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel2()
+	_, err2 := s.agentService.ContainerCreate(timeoutCtx2, containerRequest)
+	if err2 != nil {
+		s.logger.LogAttrs(ctx, slog.LevelError, "could not start container", slog.Any("error", err2))
+		return err2
+	}
+
+	errContainerStart := s.agentService.ContainerStart(ctx, "noyra-sidecar")
+
+	if errContainerStart != nil {
+		s.logger.LogAttrs(ctx, slog.LevelError, "could not start sidecar", slog.Any("error", errContainerStart))
+		return oops.Wrapf(errContainerStart, "could not start sidecar")
+	}
+
+	return nil
 }
 
 func (s *Supervisor) startLoadbalancer(ctx context.Context) error {
@@ -563,6 +620,7 @@ func (s *Supervisor) startEtcd(ctx context.Context, certs map[string][]byte) err
 			{
 				Name:    "noyra-etcd-certs",
 				Dest:    "/certs",
+				Type:    "tmpfs",
 				Options: []string{"U"},
 			},
 		},

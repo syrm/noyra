@@ -27,12 +27,6 @@ func main() {
 
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
 		AddSource: true,
-		ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
-			if len(groups) == 0 && a.Key == "time" {
-				return slog.Attr{}
-			}
-			return a
-		},
 	}))
 
 	go func() {
@@ -66,12 +60,15 @@ func main() {
 	agentService := agent.BuildAgent(podmanClient, logger)
 	ds := discovery.BuildDiscoveryService(ctx, "noyra-id", agentService, logger)
 
+	agentServer := agent.BuildServer(agentService, logger)
+	go agentServer.Run(ctx, 4646)
+
 	errgrp, errgrpCtx := errgroup.WithContext(ctx)
 	errgrp.Go(func() error {
 		return ds.Run(errgrpCtx)
 	})
 
-	tlsGenerator := tlsrefresher.BuildService("/certs", logger)
+	tlsGenerator := tlsrefresher.BuildService(os.Getenv("NOYRA_CERTS_PATH"), logger)
 	errTls := tlsGenerator.Run()
 	if errTls != nil {
 		logger.LogAttrs(ctx, slog.LevelError, "unable to generate TLS", slog.Any("error", errTls))

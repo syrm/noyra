@@ -23,12 +23,6 @@ func main() {
 
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
 		AddSource: true,
-		ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
-			if len(groups) == 0 && a.Key == "time" {
-				return slog.Attr{}
-			}
-			return a
-		},
 	}))
 
 	errgrp, ctx := errgroup.WithContext(ctx)

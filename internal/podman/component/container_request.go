@@ -3,21 +3,21 @@ package component
 // @TODO j'utilise pas certains champs, à retirer ?
 
 type ContainerRequest struct {
-	Name            string                             `json:"name"`
-	Image           string                             `json:"image"`
-	Userns          ContainerRequestUserns             `json:"userns"`
-	Netns           ContainerRequestNetns              `json:"netns"`
-	Command         []string                           `json:"command"`
-	Env             map[string]string                  `json:"env"`
-	Expose          map[uint16]string                  `json:"expose"`
-	Networks        map[string]ContainerRequestNetwork `json:"Networks"`
-	Labels          map[string]string                  `json:"labels"`
-	Mounts          []ContainerRequestMount            `json:"mounts"`
-	Volumes         []ContainerRequestVolume           `json:"volumes"`
-	Portmappings    []ContainerRequestPortmapping      `json:"portmappings"`
-	CapDrop         []string                           `json:"cap_drop"`
-	NoNewPrivileges bool                               `json:"no_new_privileges"`
-	User            string                             `json:"user"`
+	Name            string                             `json:"name,omitempty"`
+	Image           string                             `json:"image,omitempty"`
+	Userns          ContainerRequestUserns             `json:"userns,omitempty"`
+	Netns           ContainerRequestNetns              `json:"netns,omitempty"`
+	Command         []string                           `json:"command,omitempty"`
+	Env             map[string]string                  `json:"env,omitempty"`
+	Expose          map[uint16]string                  `json:"expose,omitempty"`
+	Networks        map[string]ContainerRequestNetwork `json:"Networks,omitempty"`
+	Labels          map[string]string                  `json:"labels,omitempty"`
+	Mounts          []ContainerRequestMount            `json:"mounts,omitempty"`
+	Volumes         []ContainerRequestVolume           `json:"volumes,omitempty"`
+	Portmappings    []ContainerRequestPortmapping      `json:"portmappings,omitempty"`
+	CapDrop         []string                           `json:"cap_drop,omitempty"`
+	NoNewPrivileges bool                               `json:"no_new_privileges,omitempty"`
+	User            string                             `json:"user,omitempty"`
 }
 
 type ContainerRequestUserns struct {
@@ -78,6 +78,7 @@ type ContainerRequestVolume struct {
 	IsAnonymous bool     `json:"IsAnonymous"`
 	Name        string   `json:"Name"`
 	Options     []string `json:"Options"`
+	Type        string   `json:"Type"`
 	SubPath     string   `json:"SubPath"`
 }
 

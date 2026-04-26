@@ -3,76 +3,109 @@ package agent
 import (
 	"context"
 	"errors"
-	"flag"
+	"fmt"
 	"log/slog"
 	"net"
-	"net/http"
+	"strconv"
 	"time"
 
-	protoAgent "blackprism.org/noyra/api/agent/v1"
-
-	"github.com/fullstorydev/grpchan/inprocgrpc"
+	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/health"
+	healthpb "google.golang.org/grpc/health/grpc_health_v1"
+	"google.golang.org/grpc/keepalive"
+	"google.golang.org/grpc/status"
+
+	protoAgent "blackprism.org/noyra/api/agent/v1"
 )
 
 const (
 	grpcKeepaliveTime        = 30 * time.Second
 	grpcKeepaliveTimeout     = 5 * time.Second
 	grpcKeepaliveMinTime     = 30 * time.Second
-	grpcMaxConcurrentStreams = 1000000
+	grpcMaxConcurrentStreams = 1_000_000
 )
 
-// @TODO le nom Server MEH
 type Server struct {
-	agent      Agent
-	serverMux  *http.ServeMux
-	GrpcServer *grpc.Server
+	protoAgent.UnimplementedAgentServiceServer
+
+	agent      *Agent
+	grpcServer *grpc.Server
 	logger     *slog.Logger
 }
 
-func BuildServer(agent Agent, logger *slog.Logger) *Server {
-	a := &Server{
-		agent:     agent,
-		serverMux: http.NewServeMux(),
-		logger:    logger,
+func BuildServer(agent *Agent, logger *slog.Logger) *Server {
+	s := &Server{
+		agent:  agent,
+		logger: logger,
 	}
 
-	channel := &inprocgrpc.Channel{}
-	a.GrpcServer = grpc.NewServer()
+	s.grpcServer = grpc.NewServer(
+		grpc.StatsHandler(otelgrpc.NewServerHandler()),
+		grpc.KeepaliveParams(keepalive.ServerParameters{
+			Time:    grpcKeepaliveTime,
+			Timeout: grpcKeepaliveTimeout,
+		}),
+		grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{
+			MinTime: grpcKeepaliveMinTime,
+		}),
+		grpc.MaxConcurrentStreams(grpcMaxConcurrentStreams),
+		// Logging centralisé ici — les handlers ne loguent rien eux-mêmes (single handling rule)
+		grpc.ChainUnaryInterceptor(
+			s.loggingUnaryInterceptor,
+			s.recoveryUnaryInterceptor,
+		),
+		grpc.ChainStreamInterceptor(
+			s.loggingStreamInterceptor,
+			s.recoveryStreamInterceptor,
+		),
+	)
 
-	//protoAgent.RegisterAgentServiceServer(a.GrpcServer, a)
-	channel.RegisterService(&protoAgent.AgentService_ServiceDesc, a)
+	protoAgent.RegisterAgentServiceServer(s.grpcServer, s)
+	// Health check obligatoire — Kubernetes readiness/liveness probes
+	healthpb.RegisterHealthServer(s.grpcServer, health.NewServer())
 
-	return a
+	return s
 }
 
-func (s *Server) Run(ctx context.Context) int {
-	flag.Parse()
-
-	//s.serverMux.HandleFunc("/containers", s.ListContainers())
-	//
-	//server := &http.Server{
-	//	Addr:    ":8686",
-	//	Handler: s.serverMux,
-	//}
-	//
-	//go server.ListenAndServe()
-
-	listenAgent, err := net.Listen("tcp", ":4646")
-
+func (s *Server) Run(ctx context.Context, port uint) error {
+	lis, err := net.Listen("tcp", ":"+strconv.Itoa(int(port)))
 	if err != nil {
-		s.logger.LogAttrs(ctx, slog.LevelError, "failed to listen for agent service", slog.Any("error", err))
-		return 1
+		return fmt.Errorf("listen on :"+strconv.Itoa(int(port))+" : %w", err)
 	}
 
-	s.logger.LogAttrs(ctx, slog.LevelInfo, "server service listening", slog.Any("address", listenAgent.Addr()))
+	s.logger.LogAttrs(ctx, slog.LevelInfo, "grpc server listening", slog.String("address", lis.Addr().String()))
 
-	if err := s.GrpcServer.Serve(listenAgent); err != nil {
-		s.logger.LogAttrs(ctx, slog.LevelError, "server service failed", slog.Any("error", err))
-		return 1
+	errCh := make(chan error, 1)
+	go func() {
+		if err := s.grpcServer.Serve(lis); err != nil {
+			errCh <- err
+		}
+	}()
+
+	select {
+	case err := <-errCh:
+		return fmt.Errorf("grpc serve: %w", err)
+	case <-ctx.Done():
+		return nil
 	}
+}
 
-	return 0
+func (s *Server) Shutdown(ctx context.Context) {
+	stopped := make(chan struct{})
+	go func() {
+		s.grpcServer.GracefulStop()
+		close(stopped)
+	}()
+
+	select {
+	case <-stopped:
+		s.logger.LogAttrs(ctx, slog.LevelInfo, "grpc server stopped gracefully")
+	case <-ctx.Done():
+		s.logger.LogAttrs(ctx, slog.LevelWarn, "grpc graceful stop timed out, forcing stop")
+		s.grpcServer.Stop()
+	}
 }
 
 func (s *Server) ContainerStart(
@@ -298,4 +331,72 @@ func (s *Server) ContainerListener(
 	//}
 
 	return nil
+}
+
+func (s *Server) loggingUnaryInterceptor(
+	ctx context.Context,
+	req any,
+	info *grpc.UnaryServerInfo,
+	handler grpc.UnaryHandler,
+) (any, error) {
+	start := time.Now()
+	resp, err := handler(ctx, req)
+	s.logger.LogAttrs(ctx, slog.LevelInfo, "grpc unary",
+		slog.String("method", info.FullMethod),
+		slog.Duration("duration", time.Since(start)),
+		slog.String("code", status.Code(err).String()),
+	)
+	return resp, err
+}
+
+func (s *Server) loggingStreamInterceptor(
+	srv any,
+	ss grpc.ServerStream,
+	info *grpc.StreamServerInfo,
+	handler grpc.StreamHandler,
+) error {
+	start := time.Now()
+	err := handler(srv, ss)
+	s.logger.LogAttrs(ss.Context(), slog.LevelInfo, "grpc stream",
+		slog.String("method", info.FullMethod),
+		slog.Duration("duration", time.Since(start)),
+		slog.String("code", status.Code(err).String()),
+	)
+	return err
+}
+
+func (s *Server) recoveryUnaryInterceptor(
+	ctx context.Context,
+	req any,
+	info *grpc.UnaryServerInfo,
+	handler grpc.UnaryHandler,
+) (resp any, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			s.logger.LogAttrs(ctx, slog.LevelError, "grpc panic recovered",
+				slog.String("method", info.FullMethod),
+				slog.Any("panic", r),
+			)
+			err = status.Errorf(codes.Internal, "internal server error")
+		}
+	}()
+	return handler(ctx, req)
+}
+
+func (s *Server) recoveryStreamInterceptor(
+	srv any,
+	ss grpc.ServerStream,
+	info *grpc.StreamServerInfo,
+	handler grpc.StreamHandler,
+) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			s.logger.LogAttrs(ss.Context(), slog.LevelError, "grpc stream panic recovered",
+				slog.String("method", info.FullMethod),
+				slog.Any("panic", r),
+			)
+			err = status.Errorf(codes.Internal, "internal server error")
+		}
+	}()
+	return handler(srv, ss)
 }

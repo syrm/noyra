@@ -9,18 +9,22 @@ ETCD_CLIENT_CERT = { required = true }
 ETCD_CLIENT_KEY = { required = true }
 _.file = ".env"
 
+[tools]
+"tinygo" = "0.41"
+"node" = "22"
+"npm:@musistudio/claude-code-router" = "latest"
+"buf" = "1.60"
+
+
 [tasks]
 generate="go generate ./..."
 lint="buf lint"
-build="""
-podman build -t noyra-supervisor -f deployments/container/supervisor/Containerfile .
-podman build -t noyra-loadbalancer -f deployments/container/loadbalancer/Containerfile .
-"""
-
-# sudo usermod --add-subuids 100000-199999 srm
-# sudo usermod --add-subgids 100000-199999 srm
 
 run="""
+go run cmd/noyra/main.go | hl -P
+"""
+
+runold="""
 podman network create noyra --ignore
 podman run --network noyra --env-file .container.env --replace --name  noyra-supervisor \
     --stop-timeout 0 \
@@ -31,16 +35,19 @@ podman run --network noyra --env-file .container.env --replace --name  noyra-sup
     noyra-supervisor
 """
 
-dev="""
-GOEXPERIMENT=jsonv2 go run cmd/noyra/main.go | hl -P
-"""
-
 clean="""
 podman volume rm noyra-etcd-data
 podman network rm noyra
 """
 
-[tools]
-"node" = "22"
-"npm:@musistudio/claude-code-router" = "latest"
-"buf" = "1.60"
+[tasks.build]
+depends = ["build-supervisor", "build-loadbalancer", "build-sidecar"]
+
+[tasks.build-supervisor]
+run="podman build -t noyra-supervisor -f deployments/container/supervisor/Containerfile ."
+
+[tasks.build-loadbalancer]
+run="podman build -t noyra-loadbalancer -f deployments/container/loadbalancer/Containerfile ."
+
+[tasks.build-sidecar]
+run="podman build -t noyra-sidecar -f deployments/container/sidecar/Containerfile ."

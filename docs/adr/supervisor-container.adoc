@@ -1,0 +1,10 @@
+*Le problème : la dépendance circulaire* +
+Si le supervisor tourne dans un container Podman, cela signifie que Podman doit être vivant pour que le supervisor soit vivant, alors que c'est censé être l'inverse. En cas de crash ou de corruption du runtime Podman, le supervisor meurt avec lui — et personne n'est là pour relancer quoi que ce soit. C'est exactement le problème du daemon monolithique qu'on reproche à Docker Swarm.
+
+*Ce que font les orchestrateurs sérieux* +
+Kubernetes l'a résolu clairement : le kubelet tourne comme un processus natif sur le host (via systemd), pas dans un container. Il est l'entité de confiance du nœud, et c'est lui qui gère les containers — y compris les composants du control plane sous forme de static pods. La hiérarchie est claire et sans circularité.
+
+*La bonne approche pour Noyra* +
+Le supervisor devrait tourner en tant que service systemd natif sur le host, et piloter Podman via son socket (rootless ou rootful). Il reste ainsi vivant indépendamment de l'état des containers qu'il orchestre, peut les redémarrer même si tout crashe, et conserve une hiérarchie de supervision claire :
+systemd → noyra-supervisor (binaire natif) → podman socket → containers
+Faire tourner le supervisor dans un container Podman, c'est mettre le chef d'orchestre dans la fosse avec les musiciens.
