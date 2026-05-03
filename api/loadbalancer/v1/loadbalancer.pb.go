@@ -9,7 +9,6 @@ package loadbalancerv1
 import (
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
-	_ "google.golang.org/protobuf/types/gofeaturespb"
 	reflect "reflect"
 	unsafe "unsafe"
 )
@@ -23,7 +22,7 @@ const (
 
 type UpdateConfigRequest struct {
 	state            protoimpl.MessageState `protogen:"opaque.v1"`
-	xxx_hidden_Hosts *[]*Host               `protobuf:"bytes,1,rep,name=hosts"`
+	xxx_hidden_Hosts *[]*Host               `protobuf:"bytes,1,rep,name=hosts,proto3"`
 	unknownFields    protoimpl.UnknownFields
 	sizeCache        protoimpl.SizeCache
 }
@@ -81,13 +80,11 @@ func (b0 UpdateConfigRequest_builder) Build() *UpdateConfigRequest {
 }
 
 type Host struct {
-	state                  protoimpl.MessageState `protogen:"opaque.v1"`
-	xxx_hidden_Host        *string                `protobuf:"bytes,1,opt,name=host"`
-	xxx_hidden_Targets     []string               `protobuf:"bytes,2,rep,name=targets"`
-	XXX_raceDetectHookData protoimpl.RaceDetectHookData
-	XXX_presence           [1]uint32
-	unknownFields          protoimpl.UnknownFields
-	sizeCache              protoimpl.SizeCache
+	state              protoimpl.MessageState `protogen:"opaque.v1"`
+	xxx_hidden_Host    string                 `protobuf:"bytes,1,opt,name=host,proto3"`
+	xxx_hidden_Targets []string               `protobuf:"bytes,2,rep,name=targets,proto3"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *Host) Reset() {
@@ -117,10 +114,7 @@ func (x *Host) ProtoReflect() protoreflect.Message {
 
 func (x *Host) GetHost() string {
 	if x != nil {
-		if x.xxx_hidden_Host != nil {
-			return *x.xxx_hidden_Host
-		}
-		return ""
+		return x.xxx_hidden_Host
 	}
 	return ""
 }
@@ -133,30 +127,17 @@ func (x *Host) GetTargets() []string {
 }
 
 func (x *Host) SetHost(v string) {
-	x.xxx_hidden_Host = &v
-	protoimpl.X.SetPresent(&(x.XXX_presence[0]), 0, 2)
+	x.xxx_hidden_Host = v
 }
 
 func (x *Host) SetTargets(v []string) {
 	x.xxx_hidden_Targets = v
 }
 
-func (x *Host) HasHost() bool {
-	if x == nil {
-		return false
-	}
-	return protoimpl.X.Present(&(x.XXX_presence[0]), 0)
-}
-
-func (x *Host) ClearHost() {
-	protoimpl.X.ClearPresent(&(x.XXX_presence[0]), 0)
-	x.xxx_hidden_Host = nil
-}
-
 type Host_builder struct {
 	_ [0]func() // Prevents comparability and use of unkeyed literals for the builder.
 
-	Host    *string
+	Host    string
 	Targets []string
 }
 
@@ -164,22 +145,17 @@ func (b0 Host_builder) Build() *Host {
 	m0 := &Host{}
 	b, x := &b0, m0
 	_, _ = b, x
-	if b.Host != nil {
-		protoimpl.X.SetPresentNonAtomic(&(x.XXX_presence[0]), 0, 2)
-		x.xxx_hidden_Host = b.Host
-	}
+	x.xxx_hidden_Host = b.Host
 	x.xxx_hidden_Targets = b.Targets
 	return m0
 }
 
 type UpdateConfigResponse struct {
-	state                  protoimpl.MessageState `protogen:"opaque.v1"`
-	xxx_hidden_Status      *string                `protobuf:"bytes,1,opt,name=status"`
-	xxx_hidden_Message     *string                `protobuf:"bytes,2,opt,name=message"`
-	XXX_raceDetectHookData protoimpl.RaceDetectHookData
-	XXX_presence           [1]uint32
-	unknownFields          protoimpl.UnknownFields
-	sizeCache              protoimpl.SizeCache
+	state              protoimpl.MessageState `protogen:"opaque.v1"`
+	xxx_hidden_Status  string                 `protobuf:"bytes,1,opt,name=status,proto3"`
+	xxx_hidden_Message string                 `protobuf:"bytes,2,opt,name=message,proto3"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *UpdateConfigResponse) Reset() {
@@ -209,77 +185,39 @@ func (x *UpdateConfigResponse) ProtoReflect() protoreflect.Message {
 
 func (x *UpdateConfigResponse) GetStatus() string {
 	if x != nil {
-		if x.xxx_hidden_Status != nil {
-			return *x.xxx_hidden_Status
-		}
-		return ""
+		return x.xxx_hidden_Status
 	}
 	return ""
 }
 
 func (x *UpdateConfigResponse) GetMessage() string {
 	if x != nil {
-		if x.xxx_hidden_Message != nil {
-			return *x.xxx_hidden_Message
-		}
-		return ""
+		return x.xxx_hidden_Message
 	}
 	return ""
 }
 
 func (x *UpdateConfigResponse) SetStatus(v string) {
-	x.xxx_hidden_Status = &v
-	protoimpl.X.SetPresent(&(x.XXX_presence[0]), 0, 2)
+	x.xxx_hidden_Status = v
 }
 
 func (x *UpdateConfigResponse) SetMessage(v string) {
-	x.xxx_hidden_Message = &v
-	protoimpl.X.SetPresent(&(x.XXX_presence[0]), 1, 2)
-}
-
-func (x *UpdateConfigResponse) HasStatus() bool {
-	if x == nil {
-		return false
-	}
-	return protoimpl.X.Present(&(x.XXX_presence[0]), 0)
-}
-
-func (x *UpdateConfigResponse) HasMessage() bool {
-	if x == nil {
-		return false
-	}
-	return protoimpl.X.Present(&(x.XXX_presence[0]), 1)
-}
-
-func (x *UpdateConfigResponse) ClearStatus() {
-	protoimpl.X.ClearPresent(&(x.XXX_presence[0]), 0)
-	x.xxx_hidden_Status = nil
-}
-
-func (x *UpdateConfigResponse) ClearMessage() {
-	protoimpl.X.ClearPresent(&(x.XXX_presence[0]), 1)
-	x.xxx_hidden_Message = nil
+	x.xxx_hidden_Message = v
 }
 
 type UpdateConfigResponse_builder struct {
 	_ [0]func() // Prevents comparability and use of unkeyed literals for the builder.
 
-	Status  *string
-	Message *string
+	Status  string
+	Message string
 }
 
 func (b0 UpdateConfigResponse_builder) Build() *UpdateConfigResponse {
 	m0 := &UpdateConfigResponse{}
 	b, x := &b0, m0
 	_, _ = b, x
-	if b.Status != nil {
-		protoimpl.X.SetPresentNonAtomic(&(x.XXX_presence[0]), 0, 2)
-		x.xxx_hidden_Status = b.Status
-	}
-	if b.Message != nil {
-		protoimpl.X.SetPresentNonAtomic(&(x.XXX_presence[0]), 1, 2)
-		x.xxx_hidden_Message = b.Message
-	}
+	x.xxx_hidden_Status = b.Status
+	x.xxx_hidden_Message = b.Message
 	return m0
 }
 
@@ -287,7 +225,7 @@ var File_loadbalancer_v1_loadbalancer_proto protoreflect.FileDescriptor
 
 const file_loadbalancer_v1_loadbalancer_proto_rawDesc = "" +
 	"\n" +
-	"\"loadbalancer/v1/loadbalancer.proto\x12\x0floadbalancer.v1\x1a!google/protobuf/go_features.proto\"B\n" +
+	"\"loadbalancer/v1/loadbalancer.proto\x12\x0floadbalancer.v1\"B\n" +
 	"\x13UpdateConfigRequest\x12+\n" +
 	"\x05hosts\x18\x01 \x03(\v2\x15.loadbalancer.v1.HostR\x05hosts\"4\n" +
 	"\x04Host\x12\x12\n" +
@@ -297,8 +235,8 @@ const file_loadbalancer_v1_loadbalancer_proto_rawDesc = "" +
 	"\x06status\x18\x01 \x01(\tR\x06status\x12\x18\n" +
 	"\amessage\x18\x02 \x01(\tR\amessage2t\n" +
 	"\x13LoadbalancerService\x12]\n" +
-	"\fUpdateConfig\x12$.loadbalancer.v1.UpdateConfigRequest\x1a%.loadbalancer.v1.UpdateConfigResponse\"\x00B\xc6\x01\n" +
-	"\x13com.loadbalancer.v1B\x11LoadbalancerProtoP\x01Z7blackprism.org/noyra/api/loadbalancer/v1;loadbalancerv1\xa2\x02\x03LXX\xaa\x02\x0fLoadbalancer.V1\xca\x02\x0fLoadbalancer\\V1\xe2\x02\x1bLoadbalancer\\V1\\GPBMetadata\xea\x02\x10Loadbalancer::V1\x92\x03\x05\xd2>\x02\x10\x03b\beditionsp\xe8\a"
+	"\fUpdateConfig\x12$.loadbalancer.v1.UpdateConfigRequest\x1a%.loadbalancer.v1.UpdateConfigResponse\"\x00B\xbe\x01\n" +
+	"\x13com.loadbalancer.v1B\x11LoadbalancerProtoP\x01Z7blackprism.org/noyra/api/loadbalancer/v1;loadbalancerv1\xa2\x02\x03LXX\xaa\x02\x0fLoadbalancer.V1\xca\x02\x0fLoadbalancer\\V1\xe2\x02\x1bLoadbalancer\\V1\\GPBMetadata\xea\x02\x10Loadbalancer::V1b\x06proto3"
 
 var file_loadbalancer_v1_loadbalancer_proto_msgTypes = make([]protoimpl.MessageInfo, 3)
 var file_loadbalancer_v1_loadbalancer_proto_goTypes = []any{

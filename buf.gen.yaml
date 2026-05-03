@@ -11,6 +11,7 @@ plugins:
     out: api
     opt:
       - paths=source_relative
+      - default_api_level=API_OPAQUE
 
   - remote: buf.build/grpc/go:v1.5.1
     out: api

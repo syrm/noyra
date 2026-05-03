@@ -10,6 +10,8 @@ import (
 	"encoding/pem"
 	"fmt"
 	"log/slog"
+	"net/http"
+	_ "net/http/pprof"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -17,8 +19,6 @@ import (
 	"strings"
 	"syscall"
 	"time"
-
-	"blackprism.org/noyra/internal/agent"
 )
 
 type Cert struct {
@@ -26,10 +26,16 @@ type Cert struct {
 	cert     x509.Certificate
 }
 
-const certExtension = ".pem"
-const keyExtension = "-key.pem"
+const (
+	certExtension = ".pem"
+	keyExtension  = "-key.pem"
+)
 
 func main() {
+	go func() {
+		http.ListenAndServe("localhost:6060", nil)
+	}()
+
 	ctx := context.Background()
 	ctx, cancel := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer cancel()
@@ -42,7 +48,7 @@ func main() {
 
 	go r.RotateHandler(ctx, "/certs")
 
-	a, e := agent.BuildClient("host.containers.internal:4545", logger)
+	a, e := BuildClient("host.containers.internal:4545", logger)
 
 	if e != nil {
 		println(e.Error())
@@ -239,7 +245,7 @@ func (r Renewer) writePEMAtomic(dir, filename string, data []byte) error {
 	path := filepath.Join(dir, filename)
 	tmp := path + ".tmp"
 
-	if err := os.WriteFile(tmp, data, 0600); err != nil {
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
 		return err
 	}
 

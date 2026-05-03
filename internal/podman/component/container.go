@@ -4,6 +4,7 @@ import "time"
 
 type Container struct {
 	ID     string            `json:"Id"`
+	Name   string            `json:"Name"`
 	State  string            `json:"State"`
 	Labels map[string]string `json:"Labels"`
 	Mounts []string          `json:"Mounts"`

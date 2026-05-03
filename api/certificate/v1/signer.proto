@@ -1,0 +1,26 @@
+syntax = "proto3";
+
+import "google/protobuf/timestamp.proto";
+
+package certificate.v1;
+
+service SignerService {
+  // Échange un CSR + token contre un certificat signé.
+  rpc Certify(CertifyRequest) returns (CertifyResponse);
+}
+
+message CertifyRequest {
+  // CSR en PEM (PKCS#10)
+  bytes certificate_signing_request = 1;
+}
+
+message CertifyResponse {
+  // Certificat feuille signé, en PEM
+  bytes leaf_certificate = 1;
+
+  // Chaîne d'intermédiaires, chacun en PEM
+  // Ordre : intermédiaire direct → ... → sous-CA
+  repeated bytes intermediate_certificates = 2;
+
+  google.protobuf.Timestamp not_after = 3;
+}

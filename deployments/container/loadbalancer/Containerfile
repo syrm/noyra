@@ -11,7 +11,7 @@ WORKDIR /app
 ADD . /app
 
 RUN go mod download
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o loadbalancer cmd/loadbalancer/main.go
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o noyra-loadbalancer cmd/loadbalancer/main.go
 
 FROM scratch
 
@@ -19,9 +19,9 @@ COPY --from=builder /tmp/passwd /etc/passwd
 COPY --from=builder /tmp/group /etc/group
 
 COPY --from=builder --chown=1010:1010 /home/appuser /home/appuser
-COPY --from=builder /app/loadbalancer /
+COPY --from=builder /app/noyra-loadbalancer /
 
 ENV HOME=/home/appuser
 USER appuser
 
-ENTRYPOINT ["./loadbalancer"]
+ENTRYPOINT ["/noyra-loadbalancer"]

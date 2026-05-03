@@ -5,67 +5,45 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"log/slog"
-	"os"
 	"time"
 
 	clientv3 "go.etcd.io/etcd/client/v3"
+
+	"blackprism.org/noyra/internal/certificate/component"
 )
 
 // @TODO le nom de fichier ne dit pas que c'est un client etcd
 // etsidy on dit
 
 type Client struct {
-	client         *clientv3.Client
-	tlsConfig      *tls.Config
-	caCertFile     string
-	caKeyFile      string
-	serverCertFile string
-	serverKeyFile  string
-	clientCertFile string
-	clientKeyFile  string
-	logger         *slog.Logger
+	client     *clientv3.Client
+	tlsConfig  *tls.Config
+	clientCert component.Certificate
+	logger     *slog.Logger
 }
 
 func BuildEtcdClient(
-	ctx context.Context,
-	caCertFile string,
-	caKeyFile string,
-	serverCertFile string,
-	serverKeyFile string,
-	clientCertFile string,
-	clientKeyFile string,
+	clientCert component.Certificate,
 	logger *slog.Logger,
-) (*Client, error) {
-
+) *Client {
 	return &Client{
-		caCertFile:     caCertFile,
-		caKeyFile:      caKeyFile,
-		serverCertFile: serverCertFile,
-		serverKeyFile:  serverKeyFile,
-		clientCertFile: clientCertFile,
-		clientKeyFile:  clientKeyFile,
-		logger:         logger,
-	}, nil
+		clientCert: clientCert,
+		logger:     logger,
+	}
 }
 
 func (e *Client) getClient(ctx context.Context) (*clientv3.Client, error) {
-	caCert, err := os.ReadFile(e.caCertFile)
-	if err != nil {
-		e.logger.LogAttrs(ctx, slog.LevelError, "error loading CA certificate", slog.Any("error", err))
-		return nil, err
-	}
-
 	caCertPool := x509.NewCertPool()
-	caCertPool.AppendCertsFromPEM(caCert)
+	caCertPool.AddCert(e.clientCert.Ca)
 
-	cert, err := tls.LoadX509KeyPair(e.clientCertFile, e.clientKeyFile)
-	if err != nil {
-		e.logger.LogAttrs(ctx, slog.LevelError, "error loading client certificate", slog.Any("error", err))
-		return nil, err
+	tlsCert := tls.Certificate{
+		Certificate: [][]byte{e.clientCert.Cert.Raw},
+		PrivateKey:  e.clientCert.Key,
+		Leaf:        e.clientCert.Cert,
 	}
 
 	tlsConfig := &tls.Config{
-		Certificates: []tls.Certificate{cert},
+		Certificates: []tls.Certificate{tlsCert},
 		RootCAs:      caCertPool,
 	}
 
@@ -182,16 +160,4 @@ func (e *Client) GetWithPrefix(ctx context.Context, prefix string) (map[string]s
 	}
 
 	return result, nil
-}
-
-func (e *Client) GetCaCertFile() string {
-	return e.caCertFile
-}
-
-func (e *Client) GetServerCertFile() string {
-	return e.serverCertFile
-}
-
-func (e *Client) GetServerKeyFile() string {
-	return e.serverKeyFile
 }

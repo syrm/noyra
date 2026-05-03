@@ -1,0 +1,112 @@
+c'est quoi la CRL dans une CA ?
+3:46 PM
+Claude a répondu : La Certificate Revocation List — la liste des certificats révoqués par la CA avant leur date d'expiration naturelle.
+
+La Certificate Revocation List — la liste des certificats révoqués par la CA avant leur date d'expiration naturelle.
+
+Quand un cert est compromis (clé privée volée, service supprimé, etc.) tu ne peux pas l'effacer chez tous les pairs qui lui font confiance. La CA publie donc une liste noire signée : "ces numéros de série ne sont plus valides".
+
+Dans ton cas avec des certs à courte durée (24h, 1h pour etcd), la CRL est généralement inutile — tu laisses le cert expirer naturellement. C'est d'ailleurs l'un des avantages de renouveler souvent : la fenêtre de compromission est courte et la révocation devient un non-sujet.
+
+La CRL devient pertinente si tu as des certs longue durée, comme ta CA (10 ans dans ton code).
+Vous avez dit : c'est moyen comme design de sécurité de se suffire de certs courte durée
+
+c'est moyen comme design de sécurité de se suffire de certs courte durée
+3:49 PM
+Claude a répondu : Tu as raison.
+Évalué compromis entre certificats éphémères et révocation
+
+Tu as raison. Si une clé est volée à 00h01, l'attaquant a jusqu'à 23h59 pour s'en servir et tu ne peux rien faire. C'est une fenêtre d'exposition, pas une garantie.
+
+La vraie défense en profondeur c'est court durée + révocation. Pour un système interne comme le tien, pas besoin d'implémenter une CRL complète avec point de distribution HTTP — tu peux tenir une liste de révocation en mémoire vérifiée dans ton interceptor :
+go
+
+type Revoker struct {
+mu      sync.RWMutex
+revoked map[string]time.Time // serial → revokedAt
+}
+
+func (r *Revoker) Revoke(serial *big.Int) {
+r.mu.Lock()
+defer r.mu.Unlock()
+r.revoked[serial.String()] = time.Now()
+}
+
+func (r *Revoker) IsRevoked(serial *big.Int) bool {
+r.mu.RLock()
+defer r.mu.RUnlock()
+_, ok := r.revoked[serial.String()]
+return ok
+}
+
+Et dans l'interceptor :
+go
+
+peerCert := tlsInfo.State.PeerCertificates[0]
+
+if revoker.IsRevoked(peerCert.SerialNumber) {
+return nil, status.Errorf(codes.PermissionDenied, "certificate has been revoked")
+}
+
+La révocation se déclenche sur un événement métier : service décommissionné, compromission détectée, rotation forcée. Tu persistes la liste sur disque pour survivre aux redémarrages.
+
+La combinaison court durée + révocation te donne les deux : une fenêtre d'exposition réduite par défaut, et la capacité d'agir immédiatement si nécessaire.
+Vous avez dit : du coup si c'est moyen comme design de sécurité, pourquoi k8s n'a pas de CRL ?
+
+du coup si c'est moyen comme design de sécurité, pourquoi k8s n'a pas de CRL ?
+3:50 PM
+Claude a répondu : Parce que Kubernetes a une couche d'autorisation indépendante : RBAC.
+Reconciled Kubernetes's certificate design with RBAC's independent revocation layer
+
+Parce que Kubernetes a une couche d'autorisation indépendante : RBAC.
+
+Dans Kubernetes le cert ne fait qu'authentifier (qui es-tu ?). Ce que tu peux faire est contrôlé par le RBAC, qui lui est révocable instantanément — supprimer un RoleBinding coupe l'accès immédiatement, peu importe que le cert soit encore valide.
+
+Cert volé + RBAC révoqué = authentifié mais rien autorisé
+
+Dans ton système, le cert fait les deux à la fois — il authentifie et autorise (via le CN dans ton interceptor). Il n'y a pas de couche authz indépendante à révoquer.
+
+C'est pour ça que la révocation est plus critique chez toi que dans Kubernetes.
+Vous avez dit : et comment marche RBAC pour couper l'accès immédiatement ?
+
+et comment marche RBAC pour couper l'accès immédiatement ?
+3:51 PM
+Claude a répondu : À chaque requête, l'API server réévalue les permissions en temps réel depuis etcd — il n'y a pas de cache de décision.
+
+À chaque requête, l'API server réévalue les permissions en temps réel depuis etcd — il n'y a pas de cache de décision. Supprimer un RoleBinding est immédiatement visible à la prochaine requête.
+
+requête → API server → qui es-tu ? (cert) → que peux-tu faire ? (etcd → RBAC) → autorisé/refusé
+
+Dans ton système tu peux faire pareil : au lieu de ne vérifier que le CN dans l'interceptor, tu consultes un store d'autorisation à chaque appel :
+go
+
+func authInterceptor(store AuthStore) grpc.UnaryServerInterceptor {
+return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
+identity, err := identityFromTLS(ctx)
+if err != nil {
+return nil, status.Error(codes.Unauthenticated, "no identity")
+}
+
+        // Réévalué à chaque requête comme le RBAC k8s
+        if !store.IsAllowed(identity, info.FullMethod) {
+            return nil, status.Errorf(codes.PermissionDenied, "%s not allowed on %s", identity, info.FullMethod)
+        }
+
+        return handler(ctx, req)
+    }
+}
+
+store.IsAllowed peut être aussi simple qu'une map en mémoire mise à jour à chaud. Tu n'as plus besoin de révocation de cert — couper l'accès dans le store suffit, le cert devient inopérant immédiatement même s'il est encore valide.
+
+C'est exactement ce que fait Kubernetes : le cert ne meurt jamais vraiment, c'est le RBAC qui contrôle réellement l'accès.
+
+Dans ton archi, ça se répartit naturellement sur des composants déjà existants, exactement comme Kubernetes :
+Les règles sont stockées dans Etcd — c'est déjà ton store de state, autant centraliser là.
+NoyraS écrit les règles — il gère déjà le cycle de vie des pods, il est le seul à avoir une vision globale de qui a le droit de parler à qui.
+Le Sidecar Inbound évalue les règles à chaque requête — il demande à Etcd (ou garde un cache local rafraîchi par les events de NoyraS que tu as déjà).
+requête entrante
+→ Sidecar Inbound
+→ qui es-tu ? (cert mTLS)
+→ que peux-tu faire ? (Etcd → règles)
+→ autorisé/refusé
+Tu as déjà le canal NoyraS → Pod1.Sidecar.Mgmt: events (new pod, delete pod, ...) — c'est exactement le bon endroit pour pousser les mises à jour de règles. Le sidecar maintient un cache local et NoyraS l'invalide à chaud quand une règle change. Pas besoin de taper Etcd à chaque requête.

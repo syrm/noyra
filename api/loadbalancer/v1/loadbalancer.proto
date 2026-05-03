@@ -1,7 +1,4 @@
-edition = "2023";
-
-import "google/protobuf/go_features.proto";
-option features.(pb.go).api_level = API_OPAQUE;
+syntax = "proto3";
 
 package loadbalancer.v1;
 

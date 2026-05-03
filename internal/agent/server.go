@@ -11,13 +11,12 @@ import (
 
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/health"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/keepalive"
-	"google.golang.org/grpc/status"
 
 	protoAgent "blackprism.org/noyra/api/agent/v1"
+	noyraGrpc "blackprism.org/noyra/internal/grpc"
 )
 
 const (
@@ -27,18 +26,22 @@ const (
 	grpcMaxConcurrentStreams = 1_000_000
 )
 
+type Option func(s *Server)
+
 type Server struct {
 	protoAgent.UnimplementedAgentServiceServer
 
-	agent      *Agent
-	grpcServer *grpc.Server
-	logger     *slog.Logger
+	agent             *Agent
+	grpcServer        *grpc.Server
+	loggerInterceptor noyraGrpc.LoggerInterceptor
+	logger            *slog.Logger
 }
 
-func BuildServer(agent *Agent, logger *slog.Logger) *Server {
+func BuildServer(agent *Agent, logger *slog.Logger, opts ...Option) *Server {
 	s := &Server{
-		agent:  agent,
-		logger: logger,
+		agent:             agent,
+		loggerInterceptor: noyraGrpc.BuildLogger(logger),
+		logger:            logger,
 	}
 
 	s.grpcServer = grpc.NewServer(
@@ -53,12 +56,12 @@ func BuildServer(agent *Agent, logger *slog.Logger) *Server {
 		grpc.MaxConcurrentStreams(grpcMaxConcurrentStreams),
 		// Logging centralisé ici — les handlers ne loguent rien eux-mêmes (single handling rule)
 		grpc.ChainUnaryInterceptor(
-			s.loggingUnaryInterceptor,
-			s.recoveryUnaryInterceptor,
+			s.loggerInterceptor.LoggingUnaryInterceptor,
+			s.loggerInterceptor.RecoveryUnaryInterceptor,
 		),
 		grpc.ChainStreamInterceptor(
-			s.loggingStreamInterceptor,
-			s.recoveryStreamInterceptor,
+			s.loggerInterceptor.LoggingStreamInterceptor,
+			s.loggerInterceptor.RecoveryStreamInterceptor,
 		),
 	)
 
@@ -67,6 +70,13 @@ func BuildServer(agent *Agent, logger *slog.Logger) *Server {
 	healthpb.RegisterHealthServer(s.grpcServer, health.NewServer())
 
 	return s
+}
+
+func WithLoggerInterceptor(loggerInterceptor noyraGrpc.LoggerInterceptor) Option {
+	return func(s *Server) {
+		s.logger = loggerInterceptor.GetLogger()
+		s.loggerInterceptor = loggerInterceptor
+	}
 }
 
 func (s *Server) Run(ctx context.Context, port uint) error {
@@ -86,7 +96,7 @@ func (s *Server) Run(ctx context.Context, port uint) error {
 
 	select {
 	case err := <-errCh:
-		return fmt.Errorf("grpc serve: %w", err)
+		return fmt.Errorf("grpc server: %w", err)
 	case <-ctx.Done():
 		return nil
 	}
@@ -223,25 +233,20 @@ func (s *Server) ContainerList(
 	ctx context.Context,
 	listRequest *protoAgent.ContainerListRequest,
 ) (*protoAgent.ContainerListResponse, error) {
-	//containersList, err := s.agent.ContainerList(ctx, false, listRequest.GetContainersId(), listRequest.GetLabels())
-	err := errors.New("not implemented")
+	containersList := s.agent.ListContainers(ctx, false, nil)
+	containerInfoList := make(map[string]*protoAgent.ContainerInfo)
 
-	protoAgentResponse := &protoAgent.ContainerListResponse{}
+	for _, c := range containersList {
+		containerInfo := &protoAgent.ContainerInfo{}
+		containerInfo.SetId(c.ID)
+		containerInfo.SetName(c.Name)
+		containerInfo.SetLabels(c.Labels)
+		containerInfo.SetState(c.State)
 
-	if err != nil {
-		s.logger.LogAttrs(
-			ctx,
-			slog.LevelError,
-			"error listing containers",
-			slog.Any("containersID", listRequest.GetContainersId()),
-			slog.Any("labels", listRequest.GetLabels()),
-			slog.Any("error", err),
-		)
-		protoAgentResponse.SetStatus("KO")
-		return protoAgentResponse, err
+		containerInfoList[c.ID] = containerInfo
 	}
 
-	containerInfoList := make(map[string]*protoAgent.ContainerInfo)
+	//protoAgentResponse.SetContainers(containerInfoList)
 
 	//for _, c := range containersList {
 	//	var exposedPort int32
@@ -273,10 +278,10 @@ func (s *Server) ContainerList(
 	//	containerInfoList[c.ID] = containerInfo
 	//}
 
-	containerListResponse := &protoAgent.ContainerListResponse{}
-	containerListResponse.SetContainers(containerInfoList)
+	protoAgentResponse := &protoAgent.ContainerListResponse{}
+	protoAgentResponse.SetContainers(containerInfoList)
 
-	return containerListResponse, nil
+	return protoAgentResponse, nil
 }
 
 func (s *Server) ContainerListener(
@@ -331,72 +336,4 @@ func (s *Server) ContainerListener(
 	//}
 
 	return nil
-}
-
-func (s *Server) loggingUnaryInterceptor(
-	ctx context.Context,
-	req any,
-	info *grpc.UnaryServerInfo,
-	handler grpc.UnaryHandler,
-) (any, error) {
-	start := time.Now()
-	resp, err := handler(ctx, req)
-	s.logger.LogAttrs(ctx, slog.LevelInfo, "grpc unary",
-		slog.String("method", info.FullMethod),
-		slog.Duration("duration", time.Since(start)),
-		slog.String("code", status.Code(err).String()),
-	)
-	return resp, err
-}
-
-func (s *Server) loggingStreamInterceptor(
-	srv any,
-	ss grpc.ServerStream,
-	info *grpc.StreamServerInfo,
-	handler grpc.StreamHandler,
-) error {
-	start := time.Now()
-	err := handler(srv, ss)
-	s.logger.LogAttrs(ss.Context(), slog.LevelInfo, "grpc stream",
-		slog.String("method", info.FullMethod),
-		slog.Duration("duration", time.Since(start)),
-		slog.String("code", status.Code(err).String()),
-	)
-	return err
-}
-
-func (s *Server) recoveryUnaryInterceptor(
-	ctx context.Context,
-	req any,
-	info *grpc.UnaryServerInfo,
-	handler grpc.UnaryHandler,
-) (resp any, err error) {
-	defer func() {
-		if r := recover(); r != nil {
-			s.logger.LogAttrs(ctx, slog.LevelError, "grpc panic recovered",
-				slog.String("method", info.FullMethod),
-				slog.Any("panic", r),
-			)
-			err = status.Errorf(codes.Internal, "internal server error")
-		}
-	}()
-	return handler(ctx, req)
-}
-
-func (s *Server) recoveryStreamInterceptor(
-	srv any,
-	ss grpc.ServerStream,
-	info *grpc.StreamServerInfo,
-	handler grpc.StreamHandler,
-) (err error) {
-	defer func() {
-		if r := recover(); r != nil {
-			s.logger.LogAttrs(ss.Context(), slog.LevelError, "grpc stream panic recovered",
-				slog.String("method", info.FullMethod),
-				slog.Any("panic", r),
-			)
-			err = status.Errorf(codes.Internal, "internal server error")
-		}
-	}()
-	return handler(srv, ss)
 }

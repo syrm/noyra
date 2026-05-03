@@ -28,7 +28,7 @@ func main() {
 	errgrp, ctx := errgroup.WithContext(ctx)
 
 	errgrp.Go(func() error {
-		err := gopsAgent.Listen(gopsAgent.Options{Addr: "0.0.0.0:50000"})
+		err := gopsAgent.Listen(gopsAgent.Options{Addr: "0.0.0.0:50001"})
 		if err != nil {
 			logger.LogAttrs(context.Background(), slog.LevelError, "unable to start gops agent", slog.Any("error", err))
 

@@ -1,6 +1,6 @@
 module blackprism.org/noyra
 
-go 1.26.0
+go 1.26
 
 require (
 	github.com/google/gops v0.3.28

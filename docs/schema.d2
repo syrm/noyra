@@ -13,6 +13,7 @@ vars: {
       label: Podman
       style: {
         stroke: "#cc0000"
+        stroke-width: 4
       }
     }
   }
@@ -39,6 +40,25 @@ classes: {
       stroke-dash: 3
     }
   }
+  note: {
+    shape: text
+    style: {
+      italic: true
+      font-color: "#888888"
+    }
+  }
+  annotation: {
+    style: {
+      stroke-dash: 3
+      stroke: "#888888"
+      opacity: 0.5
+    }
+    target-arrowhead: {
+      style: {
+        filled: false
+      }
+    }
+  }
   invisible: {
     style: {
       opacity: 0
@@ -53,38 +73,67 @@ NoyraLB.class: [noyra; podman]
 
 Pod1: "Pod 1"
 Pod1.class: podman
-Pod1.ServerHTTPS: "Server HTTP"
+Pod1.ServerHTTP: "Server HTTP"
 Pod1.Sidecar: "Sidecar"
 Pod1.Sidecar.class: noyra
+Pod1.Sidecar.Out: Outbound LB
+Pod1.Sidecar.In: Inbound
+Pod1.Sidecar.Cert: Cert Renewer
+Pod1.Sidecar.Mgmt: Management
+Pod1.Sidecar.Mgmt -> Pod1.ServerHTTP: health check {class: healthcheck}
+Note: "All pods share\nthe same sidecar structure"
+Note.class: note
+Note -> Pod1: {class: annotation}
 
 Pod2: "Pod 2"
 Pod2.class: podman
-Pod2.ServerHTTPS: "Server HTTP"
+Pod2.ServerHTTP: "Server HTTP"
 Pod2.Sidecar: "Sidecar"
 Pod2.Sidecar.class: noyra
 
 Pod3: "Pod 3"
 Pod3.class:  [dashed; podman]
-Pod3.ServerHTTPS: "Server HTTPS"
+Pod3.ServerHTTP: "Server HTTP"
 Pod3.Sidecar: "Sidecar"
 Pod3.Sidecar.class: noyra
 
-Client -> NoyraLB: HTTPS
-NoyraLB -> Pod1.ServerHTTPS: mTLS
-NoyraLB -> Pod2.ServerHTTPS: mTLS
-NoyraLB -> Pod3.ServerHTTPS: {class: invisible}
+Pod4: "Pod 4"
+Pod4.class: podman
+Pod4.BDD: "BDD A"
+Pod4.Sidecar: "Sidecar"
+Pod4.Sidecar.class: noyra
 
-Pod1.Sidecar -> NoyraS: renew mTLS (mTLS)
+Pod5: "Pod 5"
+Pod5.class: podman
+Pod5.BDDr: "BDD A replica"
+Pod5.Sidecar: "Sidecar"
+Pod5.Sidecar.class: noyra
+
+Client -> NoyraLB: req 1 (HTTPS)
+NoyraLB -> Pod1.Sidecar.In: req 1 (mTLS)
+Pod1.Sidecar.In -> Pod1.ServerHTTP: req 1
+
+Pod1.ServerHTTP -> Pod1.Sidecar.Out: req 2 (BDD)
+Pod1.Sidecar.Out -> Pod4.Sidecar: req 2 (BDD - mTLS) {class: dashed}
+Pod4.Sidecar -> Pod4.BDD: req 2 (BDD)
+Pod1.Sidecar.Out -> Pod5.Sidecar: req 2 (BDD - mTLS) {class: dashed}
+Pod5.Sidecar -> Pod5.BDDr: req 2 (BDD)
+
+NoyraLB -> Pod2.ServerHTTP: mTLS
+
+Pod1.Sidecar.Cert -> NoyraS: renew mTLS (mTLS)
 Pod2.Sidecar -> NoyraS: renew mTLS (mTLS)
 Pod3.Sidecar -> NoyraS: {class: invisible}
 
-Pod1.Sidecar -> NoyraS: health check (mTLS) {class: healthcheck}
+Pod1.Sidecar.Mgmt -> NoyraS: health check (mTLS) {class: healthcheck}
 Pod2.Sidecar -> NoyraS: health check (mTLS) {class: healthcheck}
 
 NoyraS: "Supervisor (stateless)"
 NoyraS.class: noyra
 NoyraS -> Pod3: schedule create
-
-NoyraS -> NoyraLB: info about health check (mTLS)
+NoyraS -> Pod1.Sidecar.Mgmt: events (new pod, delete pod, ...)
+NoyraS -> NoyraLB: health state sync (mTLS)
 
 Etcd.class: podman
+NoyraS -> Etcd
+Etcd -> NoyraS

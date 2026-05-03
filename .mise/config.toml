@@ -15,15 +15,7 @@ _.file = ".env"
 "npm:@musistudio/claude-code-router" = "latest"
 "buf" = "1.60"
 
-
 [tasks]
-generate="go generate ./..."
-lint="buf lint"
-
-run="""
-go run cmd/noyra/main.go | hl -P
-"""
-
 runold="""
 podman network create noyra --ignore
 podman run --network noyra --env-file .container.env --replace --name  noyra-supervisor \
@@ -35,19 +27,32 @@ podman run --network noyra --env-file .container.env --replace --name  noyra-sup
     noyra-supervisor
 """
 
-clean="""
+[tasks.start]
+depends="proto"
+run="go run cmd/noyra/main.go | hl -P"
+
+[tasks.clean]
+run="""
 podman volume rm noyra-etcd-data
 podman network rm noyra
 """
 
-[tasks.build]
-depends = ["build-supervisor", "build-loadbalancer", "build-sidecar"]
+[tasks.proto]
+sources = ["api/**/*.proto", "buf.gen.yaml"]
+outputs = ["api/**/*.go"]
+run="buf generate"
 
-[tasks.build-supervisor]
+[tasks."proto:lint"]
+run="buf lint"
+
+[tasks.build]
+depends = ["build-supervisor", "build-loadbalancer"]
+
+[tasks."build:supervisor"]
 run="podman build -t noyra-supervisor -f deployments/container/supervisor/Containerfile ."
 
-[tasks.build-loadbalancer]
+[tasks."build:loadbalancer"]
 run="podman build -t noyra-loadbalancer -f deployments/container/loadbalancer/Containerfile ."
 
-[tasks.build-sidecar]
+[tasks."build:sidecar"]
 run="podman build -t noyra-sidecar -f deployments/container/sidecar/Containerfile ."

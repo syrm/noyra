@@ -244,7 +244,7 @@ func (s *Supervisor) Run(ctx context.Context, certs map[string][]byte) error {
 		return oops.Wrapf(errEtcd, "supervisor can't start envoy")
 	}
 
-	s.startSidecar(ctx)
+	//s.startSidecar(ctx)
 
 	// @TODO attention etcd n'a pas encore été démarré
 	time.Sleep(5 * time.Second)
@@ -500,9 +500,8 @@ func (s *Supervisor) startLoadbalancer(ctx context.Context) error {
 		Image: "noyra-loadbalancer",
 		Name:  "noyra-loadbalancer",
 		Expose: map[uint16]string{
-			7777:  "tcp",
-			7778:  "tcp",
-			50000: "tcp",
+			7777: "tcp",
+			7778: "tcp",
 		},
 		Networks: map[string]podmanComponent.ContainerRequestNetwork{
 			"noyra": {},
