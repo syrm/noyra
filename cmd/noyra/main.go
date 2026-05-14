@@ -2,11 +2,7 @@ package main
 
 import (
 	"context"
-	"crypto"
-	"crypto/sha256"
-	"crypto/x509"
 	_ "embed"
-	"log"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -18,6 +14,7 @@ import (
 	"blackprism.org/noyra/config"
 	"blackprism.org/noyra/internal/agent"
 	"blackprism.org/noyra/internal/certificate"
+	"blackprism.org/noyra/internal/certificate/component"
 	"blackprism.org/noyra/internal/discovery"
 	"blackprism.org/noyra/internal/etcd"
 	"blackprism.org/noyra/internal/podman"
@@ -71,16 +68,31 @@ func main() {
 	})
 
 	certGenerator := certificate.Generator{}
-	caCert, errCa := certGenerator.GenerateCACertificate()
-	if errCa != nil {
-		logger.LogAttrs(ctx, slog.LevelError, "unable to generate CA cert", slog.Any("error", errCa))
+
+	var caCert *component.CertificateCa
+	caCertFromFile, errLoadCaCert := certificate.LoadCert("/mnt/data/src/noyra/ca.pem")
+	caKeyFromFile, errLoadCaKey := certificate.LoadKey("/mnt/data/src/noyra/ca-key.pem")
+
+	if errLoadCaCert != nil || errLoadCaKey != nil {
+		caCertGenerated, errCa := certGenerator.GenerateCACertificate()
+		if errCa != nil {
+			logger.LogAttrs(ctx, slog.LevelError, "unable to generate CA cert", slog.Any("error", errCa))
+		}
+		logger.LogAttrs(ctx, slog.LevelInfo, "generate CA cert")
+
+		caCert = caCertGenerated
+	} else {
+		caCert = &component.CertificateCa{
+			Cert: &caCertFromFile,
+			Key:  caKeyFromFile,
+		}
+		logger.LogAttrs(ctx, slog.LevelInfo, "load CA cert")
 	}
 
 	etcdCert, errEtcdCert := certGenerator.GenerateCertificateServer(*caCert, false, "etcd")
 	if errEtcdCert != nil {
 		logger.LogAttrs(ctx, slog.LevelError, "unable to generate etcd cert", slog.Any("error", errEtcdCert))
 	}
-	_ = etcdCert
 
 	etcdClientCert, errEtcdClientCert := certGenerator.GenerateCertificateClient(*caCert, "etcd")
 	if errEtcdClientCert != nil {
@@ -96,16 +108,6 @@ func main() {
 	_ = supervisorServer
 	//apiServer := api.BuildAPIServer(etcdClient, logger)
 
-	caPubDER, _ := x509.MarshalPKIXPublicKey(caCert.Cert.PublicKey)
-	keyPubDER, _ := x509.MarshalPKIXPublicKey(caCert.Key.(crypto.Signer).Public())
-
-	caFP := sha256.Sum256(caPubDER)
-	keyFP := sha256.Sum256(keyPubDER)
-
-	log.Printf("CA  pubkey fp: %x", caFP)
-	log.Printf("KEY pubkey fp: %x", keyFP)
-	log.Printf("match: %v", caFP == keyFP)
-
 	signerCerts, errGen := certGenerator.GenerateCertificateServer(*caCert, true, "signer")
 
 	if errGen != nil {
@@ -113,14 +115,10 @@ func main() {
 		os.Exit(1)
 	}
 
-	caCertBytes := certGenerator.CertToBytes(*caCert.Cert)
-	os.WriteFile("/mnt/data/src/noyra/ca.pem", caCertBytes, 0600)
-
-	caBytes := certGenerator.CertToBytes(*signerCerts.Ca)
-	os.WriteFile("/mnt/data/src/noyra/ca-signer.pem", caBytes, 0600)
-	os.WriteFile("/mnt/data/src/noyra-sidecar/ca-sidecar.pem", caBytes, 0600)
-	certBytes := certGenerator.CertToBytes(*signerCerts.Cert)
-	os.WriteFile("/mnt/data/src/noyra/cert-signer.pem", certBytes, 0600)
+	certificate.SaveCert(*caCert.Cert, "/mnt/data/src/noyra/ca.pem")
+	certificate.SaveKey(caCert.Key, "/mnt/data/src/noyra/ca-key.pem")
+	certificate.SaveCert(*signerCerts.Cert, "/mnt/data/src/noyra/cert-signer.pem")
+	certificate.SaveKey(signerCerts.Key, "/mnt/data/src/noyra/cert-signer-key.pem")
 
 	sidecarCerts, errGen := certGenerator.GenerateCertificateServer(*caCert, true, "sidecar")
 
@@ -129,10 +127,9 @@ func main() {
 		os.Exit(1)
 	}
 
-	certBytes = certGenerator.CertToBytes(*sidecarCerts.Cert)
-	os.WriteFile("/mnt/data/src/noyra-sidecar/cert-sidecar.pem", certBytes, 0600)
-	keyBytes, _ := certGenerator.KeyToBytes(sidecarCerts.Key)
-	os.WriteFile("/mnt/data/src/noyra-sidecar/cert-sidecar-key.pem", keyBytes, 0600)
+	certificate.SaveCert(*caCert.Cert, "/mnt/data/src/noyra-sidecar/ca-sidecar.pem")
+	certificate.SaveCert(*sidecarCerts.Cert, "/mnt/data/src/noyra-sidecar/cert-sidecar.pem")
+	certificate.SaveKey(sidecarCerts.Key, "/mnt/data/src/noyra-sidecar/cert-sidecar-key.pem")
 
 	signer := certificate.BuildSigner(*caCert, *signerCerts)
 	signerServer := certificate.BuildServer(*signerCerts, signer, logger)
@@ -145,12 +142,9 @@ func main() {
 		}
 	}()
 
-	for {
-	}
-
-	/* @TODO enable again errgrp.Go(func() error {
-		return supervisorServer.Run(errgrpCtx, certs2)
-	})*/
+	errgrp.Go(func() error {
+		return supervisorServer.Run(errgrpCtx, *etcdCert)
+	})
 
 	//errgrp.Go(func() error {
 	//	return apiServer.Run(errgrpCtx)

@@ -6,7 +6,6 @@ import (
 	cryptoRand "crypto/rand"
 	"crypto/x509"
 	"crypto/x509/pkix"
-	"encoding/pem"
 	"math/big"
 	"net"
 	"time"
@@ -197,19 +196,4 @@ func (g *Generator) GenerateCertificateClient(caCert component.CertificateCa, na
 		Cert: &clientCert,
 		Key:  clientKey,
 	}, nil
-}
-
-func (g *Generator) CertToBytes(cert x509.Certificate) []byte {
-	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: cert.Raw})
-}
-
-func (g *Generator) KeyToBytes(key crypto.PrivateKey) ([]byte, error) {
-	keyDER, errMarshal := x509.MarshalPKCS8PrivateKey(key)
-	if errMarshal != nil {
-		return nil, oops.Wrapf(errMarshal, "failed to marshal key")
-	}
-
-	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
-
-	return keyPEM, nil
 }

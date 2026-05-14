@@ -20,7 +20,9 @@ import (
 	"github.com/samber/oops"
 
 	"blackprism.org/noyra/internal/agent"
-	"blackprism.org/noyra/internal/agent/component"
+	agentComponent "blackprism.org/noyra/internal/agent/component"
+	"blackprism.org/noyra/internal/certificate"
+	certificateComponent "blackprism.org/noyra/internal/certificate/component"
 	"blackprism.org/noyra/internal/etcd"
 	podmanComponent "blackprism.org/noyra/internal/podman/component"
 )
@@ -222,7 +224,7 @@ func (s *Supervisor) loadConfig(configDir string) error {
 	return nil
 }
 
-func (s *Supervisor) Run(ctx context.Context, certs map[string][]byte) error {
+func (s *Supervisor) Run(ctx context.Context, cert certificateComponent.Certificate) error {
 	err := s.loadConfig(os.Getenv("NOYRA_CONFIG"))
 
 	if err != nil {
@@ -232,7 +234,7 @@ func (s *Supervisor) Run(ctx context.Context, certs map[string][]byte) error {
 
 	s.logger.LogAttrs(ctx, slog.LevelInfo, "supervisor starting")
 
-	errEtcd := s.startEtcd(ctx, certs)
+	errEtcd := s.startEtcd(ctx, cert)
 
 	if errEtcd != nil {
 		return oops.Wrapf(errEtcd, "supervisor can't start etcd")
@@ -332,7 +334,7 @@ func (s *Supervisor) resyncCluster(ctx context.Context) error {
 }
 
 func (s *Supervisor) observeCluster(ctx context.Context) error {
-	containerListenerResponseChan := make(chan component.ContainerListenerResponse, 1000)
+	containerListenerResponseChan := make(chan agentComponent.ContainerListenerResponse, 1000)
 
 	//go func() {
 	//	err := s.agentService.ContainerListener(ctx, containerListenerResponseChan)
@@ -488,11 +490,11 @@ func (s *Supervisor) startLoadbalancer(ctx context.Context) error {
 		}
 	}
 
-	containerPortMappingLb := component.ContainerPortMapping{}
+	containerPortMappingLb := agentComponent.ContainerPortMapping{}
 	containerPortMappingLb.ContainerPort = 7777
 	containerPortMappingLb.HostPort = 7777
 
-	containerPortMappingLb2 := component.ContainerPortMapping{}
+	containerPortMappingLb2 := agentComponent.ContainerPortMapping{}
 	containerPortMappingLb2.ContainerPort = 7778
 	containerPortMappingLb2.HostPort = 7778
 
@@ -538,7 +540,7 @@ func (s *Supervisor) startLoadbalancer(ctx context.Context) error {
 	return nil
 }
 
-func (s *Supervisor) startEtcd(ctx context.Context, certs map[string][]byte) error {
+func (s *Supervisor) startEtcd(ctx context.Context, cert certificateComponent.Certificate) error {
 	containersList := s.agentService.ListContainers(ctx, true, map[string][]string{"label": {"noyra.name=noyra-etcd"}})
 
 	//if errList != nil {
@@ -641,7 +643,21 @@ func (s *Supervisor) startEtcd(ctx context.Context, certs map[string][]byte) err
 		return oops.Wrapf(errContainerCreate, "could not create etcd")
 	}
 
-	errCopy := s.agentService.CopyFileToContainer(ctx, "noyra-etcd", certs, "/certs")
+	caBytes := certificate.SerializeCert(*cert.Ca)
+	certBytes := certificate.SerializeCert(*cert.Cert)
+	keyBytes, errSer := certificate.SerializeKey(cert.Key)
+
+	if errSer != nil {
+		return oops.Wrapf(errSer, "could not serialize key")
+	}
+
+	files := map[string][]byte{
+		"ca.pem":              caBytes,
+		"etcd-server.pem":     certBytes,
+		"etcd-server-key.pem": keyBytes,
+	}
+
+	errCopy := s.agentService.CopyFileToContainer(ctx, "noyra-etcd", files, "/certs")
 
 	if errCopy != nil {
 		return oops.Wrapf(errCopy, "could not copy certs to container etcd")

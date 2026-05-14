@@ -4,6 +4,7 @@ import (
 	"crypto"
 	"crypto/x509"
 	"encoding/pem"
+	"fmt"
 	"os"
 
 	"github.com/samber/oops"
@@ -28,7 +29,7 @@ func LoadCert(file string) (x509.Certificate, error) {
 	return *cert, nil
 }
 
-func LoadKey(file string) (crypto.PrivateKey, error) {
+func LoadKey(file string) (crypto.Signer, error) {
 	data, errRead := os.ReadFile(file)
 	if errRead != nil {
 		return nil, oops.With("file", file).Wrapf(errRead, "failed to read file")
@@ -44,5 +45,10 @@ func LoadKey(file string) (crypto.PrivateKey, error) {
 		return nil, oops.With("file", file).Wrapf(errParse, "failed to parse key")
 	}
 
-	return key, nil
+	signer, ok := key.(crypto.Signer)
+	if !ok {
+		return nil, fmt.Errorf("PKCS8 key does not implement crypto.Signer")
+	}
+
+	return signer, nil
 }

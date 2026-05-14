@@ -10,7 +10,6 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
-	"log"
 	"log/slog"
 	"net"
 	"strconv"
@@ -107,30 +106,6 @@ func BuildServer(cert component.Certificate, signer Signer, logger *slog.Logger,
 	tlsConfig := &tls.Config{
 		ClientAuth: tls.RequireAndVerifyClientCert,
 		GetConfigForClient: func(hi *tls.ClientHelloInfo) (*tls.Config, error) {
-			s.logger.Info("tls handshake",
-				slog.String("signer_server_name", hi.ServerName),
-				slog.String("signer_expiry", s.cert.Cert.NotAfter.Format("2006-01-02 15:04:05")),
-				slog.String("signer_ca_cn", s.cert.Cert.Subject.CommonName),
-				slog.Bool("signer_ca_raw_empty", len(s.cert.Cert.Raw) == 0),
-			)
-
-			s.logger.Info("client TLS handshake",
-				slog.String("client_server_name", hi.ServerName),
-				slog.Any("client_expiry", hi.Context()),
-			)
-
-			if len(s.cert.Cert.Raw) == 0 {
-				return nil, oops.New("CA certificate not yet initialized")
-			}
-
-			s.logger.Info("ca used for client verification",
-				slog.String("ca_cn", s.cert.Ca.Subject.CommonName),
-				slog.String("ca_issuer", s.cert.Ca.Issuer.CommonName),
-				slog.String("notAfter", s.cert.Cert.NotAfter.Format("2006-01-02 15:04:05")),
-				slog.String("ca", string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: s.cert.Ca.Raw}))),
-				slog.String("ca_ski", fmt.Sprintf("%X", s.cert.Ca.SubjectKeyId)),
-			)
-
 			caPool := x509.NewCertPool()
 			caPool.AddCert(s.cert.Ca)
 
@@ -140,56 +115,11 @@ func BuildServer(cert component.Certificate, signer Signer, logger *slog.Logger,
 				Leaf:        s.cert.Cert,
 			}
 
-			s.logger.Info("tls handshake return config")
-
 			return &tls.Config{
 				ClientAuth:   tls.RequireAndVerifyClientCert,
 				RootCAs:      caPool,
 				ClientCAs:    caPool,
 				Certificates: []tls.Certificate{tlsCert},
-				VerifyPeerCertificate: func(rawCerts [][]byte, verifiedChains [][]*x509.Certificate) error {
-					s.logger.Info("verify peer certificate",
-						slog.Int("raw_certs", len(rawCerts)),
-						slog.Int("verified_chains", len(verifiedChains)), // 0 = vérification échouée
-					)
-					for i, raw := range rawCerts {
-						c, err := x509.ParseCertificate(raw)
-						if err != nil {
-							continue
-						}
-						s.logger.Info("peer cert",
-							slog.Int("index", i),
-							slog.String("cn", c.Subject.CommonName),
-							slog.Time("not_after", c.NotAfter),
-							slog.Bool("expired", time.Now().After(c.NotAfter)),
-						)
-					}
-					return nil
-				},
-				VerifyConnection: func(cs tls.ConnectionState) error { // ← ajout
-					s.logger.Info("tls verify connection",
-						slog.Int("peer_certs", len(cs.PeerCertificates)),
-						slog.Bool("handshake_complete", cs.HandshakeComplete),
-					)
-					s.logger.Info("ca pool",
-						slog.String("ca_cn", s.cert.Ca.Subject.CommonName),
-						slog.Time("ca_not_after", s.cert.Ca.NotAfter),
-						slog.Bool("ca_raw_empty", len(s.cert.Ca.Raw) == 0),
-					)
-					for i, c := range cs.PeerCertificates {
-						if c == nil {
-							s.logger.Info("peer cert nil", slog.Int("index", i))
-							continue
-						}
-						s.logger.Info("peer cert",
-							slog.Int("index", i),
-							slog.String("cn", c.Subject.CommonName),
-							slog.Time("not_after", c.NotAfter),
-							slog.Any("key_usage", c.ExtKeyUsage),
-						)
-					}
-					return nil
-				},
 			}, nil
 		},
 	}
@@ -273,13 +203,6 @@ func (s *Server) Certify(
 	ctx context.Context,
 	certifyRequest *protoCertificate.CertifyRequest,
 ) (*protoCertificate.CertifyResponse, error) {
-	s.logger.Info("certify request lets go")
-
-	s.logger.Info("certify request",
-		slog.Int("csr_len", len(certifyRequest.GetCertificateSigningRequest())),
-		slog.String("csr_prefix", string(certifyRequest.GetCertificateSigningRequest()[:min(64, len(certifyRequest.GetCertificateSigningRequest()))])),
-	)
-
 	request := component.CertifyRequest{
 		SigningRequest: certifyRequest.GetCertificateSigningRequest(),
 	}
@@ -293,16 +216,6 @@ func (s *Server) Certify(
 
 	if errCert != nil {
 		return nil, oops.Wrapf(errCert, "certify failed")
-	}
-
-	if len(certificate.LeafCertificate) > 0 {
-		block, _ := pem.Decode(certificate.LeafCertificate)
-		if cert, err := x509.ParseCertificate(block.Bytes); err == nil {
-			if ecKey, ok := cert.PublicKey.(*ecdsa.PublicKey); ok {
-				raw := elliptic.Marshal(ecKey.Curve, ecKey.X, ecKey.Y)
-				log.Printf("[server] leaf cert public key raw: %02x", raw)
-			}
-		}
 	}
 
 	return protoCertificate.CertifyResponse_builder{
