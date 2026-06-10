@@ -1,26 +1,25 @@
 Noyra - orchestrator/scheduler for Podman
 =========================================
 
-L'idée de Noyra est née d'un constat simple : il n'existe pas de "pico-Kubernetes", un orchestrateur léger adapté aux petites infrastructures.  
-Docker Swarm et Nomad, les alternatives les plus proches, souffrent de limitations rédhibitoires.
+L'idée de Noyra est née d'un constat simple : Il n'existe pas d'orchestrateur multi-nœuds léger pensé pour Podman et le rootless. Kubernetes, même allégé (k3s, k0s), reste disproportionné pour quelques nœuds.
 
 Docker Swarm
 ------------
-- **Exécution root obligatoire**  
-    le daemon Docker tourne en root par défaut, ce qui élargit considérablement la surface d'attaque et complique le déploiement dans des environnements contraints ou multi-tenant.
-- **Daemon monolithique fragile**  
-    toute l'orchestration repose sur un unique processus ; s'il crashe, l'ensemble du nœud devient aveugle au cluster, sans mécanisme de récupération gracieux.
-- **Dépendance forcée à iptables**  
-    la gestion réseau est intimement couplée à iptables, rendant l'intégration avec des firewalls modernes (nftables, eBPF) complexe et la posture de sécurité difficile à auditer.
+- **Root obligatoire**  
+    le mode Swarm ne fonctionne pas en rootless, ce qui élargit la surface d'attaque
+- **Daemon fragile**  
+    toute l'orchestration repose sur le daemon Docker, et `live-restore` est incompatible avec Swarm : un redémarrage du daemon impacte les workloads
+- **Couplage à iptables**  
+    le réseau Swarm dépend d'iptables ; le support nftables de Docker, encore expérimental, exclut justement le mode Swarm
 
 HashiCorp Nomad
 ---------------
-- **Écosystème payant et verrouillé**  
-    les fonctionnalités essentielles pour la production (namespaces, SSO, audit logs) sont réservées à la licence Enterprise, rendant la version gratuite insuffisante au-delà d'un usage basique.
-- **Complexité opérationnelle sous-estimée**  
-    Nomad nécessite de déployer et opérer séparément Consul (service mesh) et Vault (secrets), transformant un orchestrateur "simple" en une stack de trois projets distincts à maintenir.
-- **Modèle de sécurité permissif par défaut**  
-    l'ACL et le chiffrement mTLS entre agents ne sont pas activés out-of-the-box, laissant des clusters entiers exposés si la configuration n'est pas durcie manuellement.
+- **Licence et modèle fermé**  
+    plus open source depuis le passage en BSL (2023) ; certaines fonctions de production (audit logs, quotas) restent réservées à l'Enterprise
+- **Complexité réelle**  
+    autonome pour les cas simples, mais les besoins avancés (service mesh, secrets dynamiques) imposent vite d'opérer Consul et Vault en plus
+- **Sécurité permissive par défaut**  
+    ACL et mTLS désactivés out-of-the-box, à durcir manuellement
 
 ![Schema](docs/schema.svg)
 
